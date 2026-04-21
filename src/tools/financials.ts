@@ -147,7 +147,7 @@ export async function searchSalesTransactions(args: z.infer<typeof searchSalesTr
 
   const params = [
     filters.length > 0 ? `$filter=${filters.join(" and ")}` : "",
-    `$select=Id,DocumentId,LineNumber,InvoiceNumber,OrderNumber,ProductItemId,ProductDescription,InvoiceDate,Account,DecimalPrice,DecimalQuantity,DecimalLineValue`,
+    `$select=Id,DocumentId,LineNumber,InvoiceNumber,OrderNumber,ProductItemId,ProductDescription,InvoiceDate,Account,TransactionType,CalculatedPrice,CalculatedInvoiceQuantity,CalculatedLineValue`,
     `$orderby=InvoiceDate desc`,
     `$top=${args.top || 50}`,
   ].filter(Boolean).join("&");
@@ -162,7 +162,7 @@ export async function searchSalesTransactions(args: z.infer<typeof searchSalesTr
       `**${t.ProductItemId || "—"}** — ${t.ProductDescription || "(no description)"}`,
       `  Invoice: ${t.InvoiceNumber || "N/A"} | Order: ${t.OrderNumber || "N/A"} | Line: ${t.LineNumber}`,
       `  Account: ${t.Account || "N/A"}`,
-      `  Qty: ${t.DecimalQuantity ?? 0} x £${(t.DecimalPrice as number)?.toFixed(2) ?? "0.00"} = £${(t.DecimalLineValue as number)?.toFixed(2) ?? "0.00"}`,
+      `  Type: ${t.TransactionType || "N/A"} | Qty: ${t.CalculatedInvoiceQuantity ?? 0} x £${(t.CalculatedPrice as number)?.toFixed(2) ?? "0.00"} = £${(t.CalculatedLineValue as number)?.toFixed(2) ?? "0.00"}`,
       `  Date: ${date}`,
     ].join("\n");
   });
@@ -204,7 +204,7 @@ export async function reportAccountFinancials(args: z.infer<typeof reportAccount
   txFilters.push(...dateFilters);
   const txParams = [
     txFilters.length > 0 ? `$filter=${txFilters.join(" and ")}` : "",
-    `$select=InvoiceNumber,OrderNumber,ProductItemId,ProductDescription,DecimalQuantity,DecimalPrice,DecimalLineValue,InvoiceDate`,
+    `$select=InvoiceNumber,OrderNumber,ProductItemId,ProductDescription,TransactionType,CalculatedInvoiceQuantity,CalculatedPrice,CalculatedLineValue,InvoiceDate`,
     `$orderby=InvoiceDate desc`,
     `$top=${args.top || 50}`,
   ].filter(Boolean).join("&");
@@ -244,7 +244,7 @@ export async function reportAccountFinancials(args: z.infer<typeof reportAccount
     output += `\n\n## Recent Transactions (${transactions.value.length})\n`;
     const txLines = transactions.value.slice(0, 30).map((t) => {
       const date = (t.InvoiceDate as string)?.substring(0, 10) || "N/A";
-      return `- ${t.ProductItemId || "—"}: ${t.ProductDescription || "N/A"} | Qty: ${t.DecimalQuantity ?? 0} x £${(t.DecimalPrice as number)?.toFixed(2) ?? "0.00"} = £${(t.DecimalLineValue as number)?.toFixed(2) ?? "0.00"} | Inv: ${t.InvoiceNumber || "N/A"} | ${date}`;
+      return `- ${t.ProductItemId || "—"}: ${t.ProductDescription || "N/A"} | ${t.TransactionType || "N/A"} | Qty: ${t.CalculatedInvoiceQuantity ?? 0} x £${(t.CalculatedPrice as number)?.toFixed(2) ?? "0.00"} = £${(t.CalculatedLineValue as number)?.toFixed(2) ?? "0.00"} | Inv: ${t.InvoiceNumber || "N/A"} | ${date}`;
     });
     output += txLines.join("\n");
   }
