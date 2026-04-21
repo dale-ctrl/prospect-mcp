@@ -46,11 +46,19 @@ export const reportAccountFinancialsSchema = z.object({
 
 export async function searchSalesInvoices(args: z.infer<typeof searchSalesInvoicesSchema>): Promise<string> {
   const client = getClient();
-  const filters: string[] = [];
+  // OperatingCompanyCode is part of the composite key — required to scope the collection.
+  const filters: string[] = [`OperatingCompanyCode eq 'A'`];
 
   if (args.invoiceNumber) filters.push(`contains(InvoiceNumber,'${args.invoiceNumber}')`);
-  if (args.divisionId) filters.push(`DivisionId eq ${args.divisionId}`);
   if (args.salesLedgerId) filters.push(`SalesLedgerId eq '${args.salesLedgerId}'`);
+  if (args.divisionId) {
+    // SalesInvoiceHeader has no DivisionId field — resolve to SalesLedgerId via Division lookup.
+    const div = await client.getById<Record<string, unknown>>(
+      "Divisions", args.divisionId, "$select=SalesLedgerId"
+    );
+    const ledgerId = div.SalesLedgerId as string | null;
+    if (ledgerId) filters.push(`SalesLedgerId eq '${ledgerId}'`);
+  }
   if (args.dateFrom) filters.push(`InvoiceDate ge ${args.dateFrom}`);
   if (args.dateTo) filters.push(`InvoiceDate le ${args.dateTo}`);
   if (args.minValue) filters.push(`BaseNetValue ge ${args.minValue}`);
@@ -125,14 +133,21 @@ export async function searchSalesTransactions(args: z.infer<typeof searchSalesTr
   if (args.orderNumber) filters.push(`contains(OrderNumber,'${args.orderNumber}')`);
   if (args.productItemId) filters.push(`contains(ProductItemId,'${args.productItemId}')`);
   if (args.productDescription) filters.push(`contains(ProductDescription,'${args.productDescription}')`);
-  if (args.divisionId) filters.push(`DivisionId eq ${args.divisionId}`);
-  if (args.salesLedgerId) filters.push(`SalesLedgerId eq '${args.salesLedgerId}'`);
+  if (args.divisionId) {
+    // SalesTransaction has no DivisionId field — resolve to account code via Division lookup.
+    const div = await client.getById<Record<string, unknown>>(
+      "Divisions", args.divisionId, "$select=SalesLedgerId"
+    );
+    const ledgerId = div.SalesLedgerId as string | null;
+    if (ledgerId) filters.push(`Account eq '${ledgerId}'`);
+  }
+  if (args.salesLedgerId) filters.push(`Account eq '${args.salesLedgerId}'`);
   if (args.dateFrom) filters.push(`InvoiceDate ge ${args.dateFrom}`);
   if (args.dateTo) filters.push(`InvoiceDate le ${args.dateTo}`);
 
   const params = [
     filters.length > 0 ? `$filter=${filters.join(" and ")}` : "",
-    `$select=Id,DocumentId,LineNumber,InvoiceNumber,OrderNumber,ProductItemId,ProductDescription,InvoiceDate,DivisionId,SalesLedgerId,DecimalPrice,DecimalQuantity,DecimalLineValue`,
+    `$select=Id,DocumentId,LineNumber,InvoiceNumber,OrderNumber,ProductItemId,ProductDescription,InvoiceDate,Account,DecimalPrice,DecimalQuantity,DecimalLineValue`,
     `$orderby=InvoiceDate desc`,
     `$top=${args.top || 50}`,
   ].filter(Boolean).join("&");
@@ -146,7 +161,7 @@ export async function searchSalesTransactions(args: z.infer<typeof searchSalesTr
     return [
       `**${t.ProductItemId || "—"}** — ${t.ProductDescription || "(no description)"}`,
       `  Invoice: ${t.InvoiceNumber || "N/A"} | Order: ${t.OrderNumber || "N/A"} | Line: ${t.LineNumber}`,
-      `  DivisionId: ${t.DivisionId || "N/A"} | Account: ${t.SalesLedgerId || "N/A"}`,
+      `  Account: ${t.Account || "N/A"}`,
       `  Qty: ${t.DecimalQuantity ?? 0} x £${(t.DecimalPrice as number)?.toFixed(2) ?? "0.00"} = £${(t.DecimalLineValue as number)?.toFixed(2) ?? "0.00"}`,
       `  Date: ${date}`,
     ].join("\n");
@@ -170,8 +185,10 @@ export async function reportAccountFinancials(args: z.infer<typeof reportAccount
   if (args.dateFrom) dateFilters.push(`InvoiceDate ge ${args.dateFrom}`);
   if (args.dateTo) dateFilters.push(`InvoiceDate le ${args.dateTo}`);
 
-  // Fetch invoices for this division
-  const invFilters = [`DivisionId eq ${args.divisionId}`, ...dateFilters];
+  // Fetch invoices — SalesInvoiceHeader has no DivisionId; filter by SalesLedgerId + OperatingCompanyCode
+  const invFilters: string[] = [`OperatingCompanyCode eq 'A'`];
+  if (salesLedgerId) invFilters.push(`SalesLedgerId eq '${salesLedgerId}'`);
+  invFilters.push(...dateFilters);
   const invParams = [
     `$filter=${invFilters.join(" and ")}`,
     `$select=InvoiceNumber,CreditNoteNumber,InvoiceDate,NetValue,GrossValue,CustomerReference`,
@@ -181,14 +198,16 @@ export async function reportAccountFinancials(args: z.infer<typeof reportAccount
 
   const invoices = await client.get<Record<string, unknown>>("SalesInvoiceHeaders", invParams);
 
-  // Fetch transactions for this division
-  const txFilters = [`DivisionId eq ${args.divisionId}`, ...dateFilters];
+  // Fetch transactions — SalesTransaction has no DivisionId; filter by Account (= SalesLedgerId)
+  const txFilters: string[] = [];
+  if (salesLedgerId) txFilters.push(`Account eq '${salesLedgerId}'`);
+  txFilters.push(...dateFilters);
   const txParams = [
-    `$filter=${txFilters.join(" and ")}`,
+    txFilters.length > 0 ? `$filter=${txFilters.join(" and ")}` : "",
     `$select=InvoiceNumber,OrderNumber,ProductItemId,ProductDescription,DecimalQuantity,DecimalPrice,DecimalLineValue,InvoiceDate`,
     `$orderby=InvoiceDate desc`,
     `$top=${args.top || 50}`,
-  ].join("&");
+  ].filter(Boolean).join("&");
 
   const transactions = await client.get<Record<string, unknown>>("SalesTransactions", txParams);
 

@@ -15,8 +15,8 @@ export const searchContactsSchema = z.object({
 
 export const searchProductsSchema = z.object({
   searchTerm: z.string().describe("Product code (SKU) or description to search for"),
-  salesAnalysisMin: z.number().optional().describe("Filter by SalesAnalysis nominal >= this value (e.g. 1000 for paper range 1000–1195)"),
-  salesAnalysisMax: z.number().optional().describe("Filter by SalesAnalysis nominal <= this value"),
+  salesAnalysisMin: z.number().optional().describe("Filter by Access Dimensions sales nominal >= this integer (e.g. 1000). Stored as string '10-1-NNNN-000' — pass the 4-digit nominal only."),
+  salesAnalysisMax: z.number().optional().describe("Filter by Access Dimensions sales nominal <= this integer (e.g. 1195). Used with salesAnalysisMin to filter a range, e.g. 1000–1195 for paper."),
   top: z.number().optional().default(10).describe("Max results (default 10)"),
 });
 
@@ -74,8 +74,17 @@ export async function searchProducts(args: z.infer<typeof searchProductsSchema>)
     `(contains(ProductItemId,'${term}') or contains(Description,'${term}'))`,
     "Obsolete ne 1",
   ];
-  if (args.salesAnalysisMin !== undefined) filterParts.push(`SalesAnalysis ge ${args.salesAnalysisMin}`);
-  if (args.salesAnalysisMax !== undefined) filterParts.push(`SalesAnalysis le ${args.salesAnalysisMax}`);
+  // SalesAnalysis is Edm.String with format "10-1-NNNN-000" (e.g. "10-1-1125-000").
+  // Use lexical string comparisons with zero-padded 4-digit nominal segments.
+  // -000 as min suffix, -999 as max suffix so the entire nominal range is captured.
+  if (args.salesAnalysisMin !== undefined) {
+    const min = String(args.salesAnalysisMin).padStart(4, '0');
+    filterParts.push(`SalesAnalysis ge '10-1-${min}-000'`);
+  }
+  if (args.salesAnalysisMax !== undefined) {
+    const max = String(args.salesAnalysisMax).padStart(4, '0');
+    filterParts.push(`SalesAnalysis le '10-1-${max}-999'`);
+  }
 
   const params = [
     `$filter=${filterParts.join(" and ")}`,
