@@ -10,6 +10,7 @@ Gives Claude the ability to:
 - **Create new quotes** linked to a contact
 - **Add, update, and remove quote lines** with products, prices, and discounts
 - **Search contacts, companies, and products** in the CRM catalogue
+- **Email a quote** to its primary contact using the tenant's default email template, and download the rendered PDF (opt-in, see **Quote Messaging** below)
 
 ## Setup (first time)
 
@@ -86,6 +87,55 @@ In Claude Desktop (Chat or Cowork), try:
 - *"Find product code WB-PANEL in the catalogue"*
 - *"Search for contacts at Plymouth Council"*
 
+## Quote Messaging (send PDF by email)
+
+Two tools replicate the 7-call flow Prospect's own UI runs when you hit "Send Email":
+
+- **`send_quote_email({ quoteId, to?, cc?, bcc?, subject?, messageBody?, emailTemplateCode?, quoteTemplateCode?, attachPdf? })`** — renders the email subject+body from `_EMLQC` by default, renders the user's signature, creates a `_QUOTE` PDF attachment shell, stages the attachment, and fires `SendMessage`. `to` defaults to the quote's primary contact email. Overrides are optional — every parameter except `quoteId` has a sensible default. Returns the DocumentId of the sent-email record + the DocumentId of the PDF attachment (feed that to `get_merge_output`).
+- **`get_merge_output({ documentId, saveTo? })`** — fetches the source document via `GET /Documents({id})/Raw()` (typically a DOCX). Pass `saveTo` (file path or directory) to write to disk and get back only metadata; omit it to receive base64 bytes inline. Real quote documents are 40–100 KB, so `saveTo` is strongly preferred.
+
+> ⚠️ **`send_quote_email` fires a REAL email on every call.** It's gated behind a separate `messaging` permission module that is **off by default for all users — including admins with `writeAllow: "*"`**. You must opt in explicitly.
+
+### Required environment
+
+Add to `.env`:
+
+```
+PROSPECT_PAT=<your_personal_access_token>
+PROSPECT_BASE_URL=https://api-v1-westeurope.prospect365.com
+```
+
+`PROSPECT_PROFILE_ID` is resolved automatically on first request via `GET /Info()`. You only need to set it manually if that auto-fetch is blocked (e.g. running offline against a fixture). `PROSPECT_LOCALE` defaults to `en-GB`.
+
+**Do not use the public-docs host** `crm-odata-v1.prospect365.com` — it's a read-only shim on which `SendMessage` silently returns `value: 0`.
+
+### Opt-in walkthrough
+
+1. Edit `config/permissions.json` and grant your user `messaging.send`:
+
+    ```json
+    "DL": {
+      "name": "Dale Liesching",
+      "writeAllow": "*",
+      "permissions": {
+        "messaging": { "send": true }
+      }
+    }
+    ```
+
+2. Rebuild: `npm run build`.
+3. Restart Claude Desktop (or any MCP host holding this server) so the updated tool description is picked up.
+
+### Live smoke test
+
+```
+PROSPECT_PAT=<pat> npm run test:send-message -- <QuoteId>
+```
+
+Sends a real email to the quote's primary contact and saves the source DOCX to `./smoke-test-output/`. Only run against a quote whose primary contact is an address you own.
+
+Implementation details + why earlier approaches silently no-opped: [src/tools/MESSAGING-NOTES.md](src/tools/MESSAGING-NOTES.md).
+
 ## Development
 
 Code lives on the NAS share. To make changes:
@@ -122,9 +172,11 @@ prospect-mcp/
 │   ├── client.ts          # OData HTTP client
 │   ├── test-api.ts        # API connectivity test
 │   ├── tools/
-│   │   ├── quotes.ts      # Quote header CRUD
-│   │   ├── quote-lines.ts # Quote line add/update/delete
-│   │   └── lookups.ts     # Contact, product, division search
+│   │   ├── quotes.ts          # Quote header CRUD
+│   │   ├── quote-lines.ts     # Quote line add/update/delete
+│   │   ├── quote-messaging.ts # send_quote_email + get_merge_output
+│   │   ├── MESSAGING-NOTES.md # v2 roadmap & API investigation trail
+│   │   └── lookups.ts         # Contact, product, division search
 │   └── types/
 │       └── prospect.ts    # TypeScript interfaces from OData metadata
 └── dist/                  # Compiled JS (after npm run build)
