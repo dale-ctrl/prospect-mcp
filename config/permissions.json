@@ -1,0 +1,124 @@
+{
+  "users": {
+    "DL": {
+      "name": "Dale Liesching",
+      "writeAllow": "*",
+      "permissions": {},
+      "notes": "Admin — full access"
+    }
+  },
+  "defaults": {
+    "writeAllow": "",
+    "permissions": {},
+    "notes": "Default for unknown users — read-only"
+  },
+  "modules": [
+    {
+      "id": "quotes",
+      "label": "Quotes",
+      "description": "Quotes and quote lines",
+      "actions": [
+        "create",
+        "edit",
+        "delete"
+      ]
+    },
+    {
+      "id": "contacts",
+      "label": "Contacts & Companies",
+      "description": "Contacts and divisions",
+      "actions": [
+        "create",
+        "edit"
+      ]
+    },
+    {
+      "id": "opportunities",
+      "label": "Opportunities",
+      "description": "Leads/opportunities",
+      "actions": [
+        "create",
+        "edit"
+      ]
+    },
+    {
+      "id": "tasks",
+      "label": "Tasks",
+      "description": "Tasks and follow-ups",
+      "actions": [
+        "create",
+        "edit"
+      ]
+    },
+    {
+      "id": "problems",
+      "label": "Problems/Tickets",
+      "description": "Support tickets",
+      "actions": [
+        "create",
+        "edit"
+      ]
+    },
+    {
+      "id": "jobs",
+      "label": "Jobs",
+      "description": "Jobs/projects",
+      "actions": [
+        "create",
+        "edit"
+      ]
+    },
+    {
+      "id": "bookings",
+      "label": "Bookings",
+      "description": "Resource bookings",
+      "actions": [
+        "create",
+        "edit"
+      ]
+    },
+    {
+      "id": "contracts",
+      "label": "Contracts",
+      "description": "Contracts and schedules",
+      "actions": [
+        "create",
+        "edit"
+      ]
+    },
+    {
+      "id": "campaigns",
+      "label": "Campaigns",
+      "description": "Marketing campaigns",
+      "actions": [
+        "create"
+      ]
+    },
+    {
+      "id": "enquiries",
+      "label": "Enquiries",
+      "description": "Inbound enquiries",
+      "actions": [
+        "create",
+        "edit"
+      ]
+    },
+    {
+      "id": "inventory",
+      "label": "Inventory",
+      "description": "Assets/equipment",
+      "actions": [
+        "create",
+        "edit"
+      ]
+    },
+    {
+      "id": "knowledge",
+      "label": "Knowledge Base",
+      "description": "Quoting lessons and product notes",
+      "actions": [
+        "create"
+      ]
+    }
+  ]
+}

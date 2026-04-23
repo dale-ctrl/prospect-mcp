@@ -1,0 +1,534 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>ProspectCRM Connector — Admin Portal</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background: #f3f2f1; color: #323130; }
+
+  .header { background: #0078d4; color: white; padding: 16px 24px; }
+  .header h1 { font-size: 18px; font-weight: 600; }
+  .header .subtitle { font-size: 12px; opacity: 0.8; }
+
+  .container { max-width: 960px; margin: 24px auto; padding: 0 16px; }
+
+  .card { background: white; border-radius: 8px; border: 1px solid #edebe9; margin-bottom: 16px; overflow: hidden; }
+  .card-header { padding: 16px 20px; border-bottom: 1px solid #edebe9; display: flex; justify-content: space-between; align-items: center; }
+  .card-header h2 { font-size: 16px; font-weight: 600; }
+  .card-body { padding: 20px; }
+
+  .user-row { display: flex; align-items: center; padding: 12px 20px; border-bottom: 1px solid #f3f2f1; gap: 16px; }
+  .user-row:last-child { border-bottom: none; }
+  .user-row:hover { background: #f9f9f9; }
+  .user-code { font-weight: 600; font-size: 14px; width: 50px; color: #0078d4; }
+  .user-name { flex: 1; font-size: 14px; }
+  .user-perms { font-size: 12px; color: #605e5c; max-width: 300px; }
+  .user-actions { display: flex; gap: 8px; }
+
+  .badge { display: inline-block; padding: 2px 8px; border-radius: 10px; font-size: 11px; font-weight: 600; }
+  .badge-admin { background: #e8f5e0; color: #498205; }
+  .badge-readonly { background: #f3f2f1; color: #797775; }
+  .badge-custom { background: #e6f2fb; color: #0078d4; }
+
+  button { padding: 6px 16px; border-radius: 4px; border: 1px solid #8a8886; background: white; cursor: pointer; font-size: 13px; }
+  button:hover { background: #f3f2f1; }
+  button.primary { background: #0078d4; color: white; border-color: #0078d4; }
+  button.primary:hover { background: #106ebe; }
+  button.danger { color: #d13438; border-color: #d13438; }
+  button.danger:hover { background: #fde7e9; }
+
+  .modal-overlay { display: none; position: fixed; top: 0; left: 0; right: 0; bottom: 0; background: rgba(0,0,0,0.4); z-index: 100; align-items: center; justify-content: center; }
+  .modal-overlay.active { display: flex; }
+  .modal { background: white; border-radius: 8px; width: 620px; max-height: 85vh; overflow-y: auto; box-shadow: 0 8px 32px rgba(0,0,0,0.2); }
+  .modal-header { padding: 16px 20px; border-bottom: 1px solid #edebe9; font-size: 16px; font-weight: 600; }
+  .modal-body { padding: 20px; }
+  .modal-footer { padding: 12px 20px; border-top: 1px solid #edebe9; display: flex; justify-content: flex-end; gap: 8px; }
+
+  .form-group { margin-bottom: 16px; }
+  .form-group label { display: block; font-size: 13px; font-weight: 600; margin-bottom: 4px; }
+  .form-group input { width: 100%; padding: 8px 10px; border: 1px solid #8a8886; border-radius: 4px; font-size: 13px; }
+  .form-group input:focus { border-color: #0078d4; outline: none; }
+
+  .full-access-toggle { padding: 12px; border-radius: 4px; margin-bottom: 16px; display: flex; align-items: center; gap: 8px; cursor: pointer; border: 2px solid #edebe9; }
+  .full-access-toggle.active { background: #e8f5e0; border-color: #498205; }
+
+  /* Permissions table */
+  .perm-table { width: 100%; border-collapse: collapse; font-size: 13px; }
+  .perm-table th { text-align: center; padding: 8px 12px; background: #f3f2f1; font-weight: 600; font-size: 12px; text-transform: uppercase; letter-spacing: 0.5px; border-bottom: 2px solid #edebe9; }
+  .perm-table th:first-child { text-align: left; width: 45%; }
+  .perm-table td { padding: 8px 12px; border-bottom: 1px solid #f3f2f1; }
+  .perm-table td:first-child { font-weight: 500; }
+  .perm-table td:not(:first-child) { text-align: center; }
+  .perm-table tr:hover { background: #fafafa; }
+  .perm-table .module-desc { font-size: 11px; color: #605e5c; font-weight: 400; }
+  .perm-table tr.disabled { opacity: 0.4; }
+
+  /* Toggle switch */
+  .toggle { position: relative; display: inline-block; width: 36px; height: 20px; }
+  .toggle input { opacity: 0; width: 0; height: 0; }
+  .toggle .slider { position: absolute; cursor: pointer; top: 0; left: 0; right: 0; bottom: 0; background: #c8c6c4; border-radius: 20px; transition: 0.2s; }
+  .toggle .slider:before { position: absolute; content: ""; height: 14px; width: 14px; left: 3px; bottom: 3px; background: white; border-radius: 50%; transition: 0.2s; }
+  .toggle input:checked + .slider { background: #0078d4; }
+  .toggle input:checked + .slider:before { transform: translateX(16px); }
+  .toggle input:disabled + .slider { background: #edebe9; cursor: default; }
+
+  /* Module enable checkbox */
+  .module-enable { width: 16px; height: 16px; cursor: pointer; accent-color: #0078d4; }
+
+  .defaults-section { background: #fff4e5; border: 1px solid #ca5010; border-radius: 4px; padding: 12px; }
+  .defaults-section h3 { font-size: 13px; color: #ca5010; margin-bottom: 8px; }
+
+  .status-bar { padding: 8px 16px; font-size: 12px; text-align: center; }
+  .status-bar.success { background: #e8f5e0; color: #498205; }
+  .status-bar.error { background: #fde7e9; color: #d13438; }
+
+  .config-snippet { background: #f3f2f1; padding: 12px; border-radius: 4px; font-family: 'Consolas', monospace; font-size: 12px; white-space: pre-wrap; word-break: break-all; }
+
+  .empty-state { text-align: center; padding: 40px; color: #605e5c; }
+</style>
+</head>
+<body>
+
+<div class="header" style="display:flex; align-items:center; justify-content:space-between;">
+  <div>
+    <h1>ProspectCRM Connector — Admin Portal</h1>
+    <div class="subtitle">Manage user permissions for the Claude Desktop CRM connector</div>
+  </div>
+  <a href="/quote-builder.html" style="color:white; background:rgba(255,255,255,0.2); padding:8px 16px; border-radius:4px; text-decoration:none; font-size:13px;">Quote Prompt Builder →</a>
+</div>
+
+<div id="status" class="status-bar" style="display:none"></div>
+
+<div class="container">
+  <div class="card">
+    <div class="card-header">
+      <h2>Default Permissions</h2>
+      <span class="badge badge-readonly">Applied to unknown users</span>
+    </div>
+    <div class="card-body">
+      <div class="defaults-section">
+        <h3>When a user connects who isn't listed below, these defaults apply:</h3>
+        <p id="defaultsDisplay" style="font-size:13px; margin-top:8px;"></p>
+      </div>
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="card-header">
+      <h2>Users</h2>
+      <button class="primary" onclick="openAddUser()">+ Add User</button>
+    </div>
+    <div id="userList"></div>
+  </div>
+
+  <div class="card">
+    <div class="card-header"><h2>Setup Guide — Installing on a New Machine</h2></div>
+    <div class="card-body">
+      <ol style="font-size:13px; line-height:2.2; padding-left:20px;">
+        <li>Install <strong>Node.js</strong> (v18 or later) on the machine — download from <code>nodejs.org</code></li>
+        <li>Install <strong>Claude Desktop</strong> and sign in with a <strong>Claude Pro</strong> account ($20/month)</li>
+        <li>Log into <strong>Prospect CRM</strong> as the user and generate a <strong>Personal Access Token</strong>: Settings &gt; Integrations &gt; API</li>
+        <li>In this admin portal, click <strong>+ Add User</strong> — enter their user code, name, PAT token, and set their permissions</li>
+        <li>Click <strong>Config</strong> next to their name — click <strong>Copy to Clipboard</strong> (the config includes their PAT automatically)</li>
+        <li>On their machine, open <code>%APPDATA%\Claude\claude_desktop_config.json</code> and paste the config (this file is created automatically when Claude Desktop is installed)</li>
+        <li>In Claude Desktop, create a <strong>Cowork Project</strong> called "ProspectCRM" and add the project instructions (ask Dale for these)</li>
+        <li>Restart Claude Desktop — the prospect-crm connector will appear and they're ready to go</li>
+      </ol>
+      <div style="margin-top:12px; padding:10px; background:#e6f2fb; border-radius:4px; font-size:12px;">
+        <strong>Note:</strong> The user's machine must have network access to <code>\\192.168.1.155\sfm_data</code> (the WCG NAS). No drive mapping is needed — the config uses the UNC path directly.
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Edit/Add User Modal -->
+<div class="modal-overlay" id="userModal">
+  <div class="modal">
+    <div class="modal-header" id="modalTitle">Add User</div>
+    <div class="modal-body">
+      <div class="form-group">
+        <label>User Code (must match their Prospect CRM user code)</label>
+        <input type="text" id="editCode" placeholder="e.g. ML, AW, JM" maxlength="10">
+      </div>
+      <div class="form-group">
+        <label>Full Name</label>
+        <input type="text" id="editName" placeholder="e.g. Miles Liesching">
+      </div>
+      <div class="form-group">
+        <label>PAT Token (Personal Access Token from Prospect CRM)</label>
+        <input type="text" id="editPat" placeholder="Paste their PAT token here — it will be included in their config snippet">
+        <div style="font-size:11px; color:#605e5c; margin-top:4px;">Generated in Prospect CRM: Settings &gt; Integrations &gt; API (logged in as this user). The token is stored here so you can generate their config at any time.</div>
+      </div>
+      <div class="form-group">
+        <label>Notes</label>
+        <input type="text" id="editNotes" placeholder="e.g. Interiors salesperson">
+      </div>
+
+      <div class="full-access-toggle" id="fullAccessToggle" onclick="toggleFullAccess()">
+        <input type="checkbox" id="fullAccessCheck" style="width:16px;height:16px;accent-color:#498205;">
+        <div>
+          <div style="font-size:14px; font-weight:600;">Full Access (Admin)</div>
+          <div style="font-size:12px; color:#605e5c;">Read and write everything — all toggles enabled</div>
+        </div>
+      </div>
+
+      <table class="perm-table" id="permTable">
+        <thead>
+          <tr>
+            <th>Module</th>
+            <th>Enabled</th>
+            <th>Create</th>
+            <th>Edit</th>
+            <th>Delete</th>
+          </tr>
+        </thead>
+        <tbody id="permTableBody"></tbody>
+      </table>
+    </div>
+    <div class="modal-footer">
+      <button onclick="closeModal()">Cancel</button>
+      <button class="primary" onclick="saveUser()">Save</button>
+    </div>
+  </div>
+</div>
+
+<!-- Config Snippet Modal -->
+<div class="modal-overlay" id="configModal">
+  <div class="modal">
+    <div class="modal-header">Claude Desktop Config</div>
+    <div class="modal-body">
+      <p style="font-size:13px; margin-bottom:12px;">Copy this into <code>%APPDATA%\Claude\claude_desktop_config.json</code> on the user's machine:</p>
+      <div class="config-snippet" id="configSnippet"></div>
+      <p style="font-size:12px; color:#605e5c; margin-top:12px;">Replace <code>THEIR_PAT_TOKEN</code> with the user's Personal Access Token from Prospect CRM.</p>
+    </div>
+    <div class="modal-footer">
+      <button onclick="closeConfigModal()">Close</button>
+      <button class="primary" onclick="copyConfig()">Copy to Clipboard</button>
+    </div>
+  </div>
+</div>
+
+<script>
+const CONFIG_PATH = '/config/permissions.json';
+let config = null;
+let editingUser = null;
+
+async function loadConfig() {
+  try {
+    const resp = await fetch(CONFIG_PATH + '?t=' + Date.now());
+    config = await resp.json();
+    render();
+  } catch (err) {
+    showStatus('Failed to load permissions.json', 'error');
+  }
+}
+
+async function saveConfig() {
+  try {
+    const resp = await fetch('/api/save-permissions', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(config, null, 2),
+    });
+    if (!resp.ok) throw new Error('Save failed');
+    showStatus('Permissions saved. Users will pick up changes on next Claude Desktop restart.', 'success');
+  } catch {
+    const blob = new Blob([JSON.stringify(config, null, 2)], { type: 'application/json' });
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = 'permissions.json';
+    a.click();
+    showStatus('Downloaded permissions.json — copy to Z:\\prospect-mcp\\config\\ to apply.', 'success');
+  }
+}
+
+function showStatus(msg, type) {
+  const el = document.getElementById('status');
+  el.textContent = msg;
+  el.className = 'status-bar ' + type;
+  el.style.display = 'block';
+  setTimeout(() => el.style.display = 'none', 6000);
+}
+
+// ─── Render user list ─────────────────────────────────────────
+
+function getPermSummary(user) {
+  if (user.writeAllow === '*') return { badge: 'admin', label: 'Full Access', detail: 'All modules — create, edit, delete' };
+
+  const perms = user.permissions || {};
+  const modules = Object.keys(perms).filter(m => {
+    const p = perms[m];
+    return p.create || p.edit || p.delete;
+  });
+
+  if (modules.length === 0) return { badge: 'readonly', label: 'Read Only', detail: 'No write access' };
+
+  const details = modules.map(m => {
+    const p = perms[m];
+    const acts = [p.create && 'C', p.edit && 'E', p.delete && 'D'].filter(Boolean).join('');
+    const mod = config.modules.find(x => x.id === m);
+    return `${mod?.label || m} (${acts})`;
+  });
+
+  return { badge: 'custom', label: 'Custom', detail: details.join(', ') };
+}
+
+function render() {
+  const defaultsEl = document.getElementById('defaultsDisplay');
+  defaultsEl.textContent = !config.defaults.writeAllow ? 'Read-only — no write access' : config.defaults.writeAllow === '*' ? 'Full access' : 'Custom';
+
+  const listEl = document.getElementById('userList');
+  const users = Object.entries(config.users);
+
+  if (users.length === 0) {
+    listEl.innerHTML = '<div class="empty-state">No users configured. Click "+ Add User" to get started.</div>';
+    return;
+  }
+
+  listEl.innerHTML = users.map(([code, user]) => {
+    const s = getPermSummary(user);
+    const hasPat = user.pat ? '<span style="color:#498205;font-size:11px;" title="PAT token stored">&#10003; PAT</span>' : '<span style="color:#d13438;font-size:11px;" title="No PAT token — add via Edit">&#10007; No PAT</span>';
+
+    return `
+      <div class="user-row">
+        <div class="user-code">${code}</div>
+        <div class="user-name">${user.name || '(unnamed)'} ${hasPat}</div>
+        <span class="badge badge-${s.badge}">${s.label}</span>
+        <div class="user-perms">${s.detail}</div>
+        <div class="user-actions">
+          <button onclick="showConfig('${code}')">Config</button>
+          <button onclick="editUser('${code}')">Edit</button>
+          <button class="danger" onclick="deleteUser('${code}')">Remove</button>
+        </div>
+      </div>`;
+  }).join('');
+}
+
+// ─── Edit modal ───────────────────────────────────────────────
+
+function openAddUser() {
+  editingUser = null;
+  document.getElementById('modalTitle').textContent = 'Add User';
+  document.getElementById('editCode').value = '';
+  document.getElementById('editCode').disabled = false;
+  document.getElementById('editName').value = '';
+  document.getElementById('editPat').value = '';
+  document.getElementById('editNotes').value = '';
+  document.getElementById('fullAccessCheck').checked = false;
+  renderPermTable({});
+  updateFullAccessState();
+  document.getElementById('userModal').classList.add('active');
+}
+
+function editUser(code) {
+  editingUser = code;
+  const user = config.users[code];
+  document.getElementById('modalTitle').textContent = 'Edit User — ' + (user.name || code);
+  document.getElementById('editCode').value = code;
+  document.getElementById('editCode').disabled = true;
+  document.getElementById('editName').value = user.name || '';
+  document.getElementById('editPat').value = user.pat || '';
+  document.getElementById('editNotes').value = user.notes || '';
+
+  const isFullAccess = user.writeAllow === '*';
+  document.getElementById('fullAccessCheck').checked = isFullAccess;
+  renderPermTable(isFullAccess ? buildFullPerms() : (user.permissions || {}));
+  updateFullAccessState();
+  document.getElementById('userModal').classList.add('active');
+}
+
+function buildFullPerms() {
+  const perms = {};
+  config.modules.forEach(mod => {
+    perms[mod.id] = {};
+    mod.actions.forEach(a => perms[mod.id][a] = true);
+  });
+  return perms;
+}
+
+function renderPermTable(currentPerms) {
+  const tbody = document.getElementById('permTableBody');
+
+  tbody.innerHTML = config.modules.map(mod => {
+    const p = currentPerms[mod.id] || {};
+    const hasAny = mod.actions.some(a => p[a]);
+
+    return `
+      <tr data-module="${mod.id}" class="${hasAny ? '' : 'disabled'}">
+        <td>
+          <div>${mod.label}</div>
+          <div class="module-desc">${mod.description}</div>
+        </td>
+        <td>
+          <input type="checkbox" class="module-enable" data-module="${mod.id}"
+            ${hasAny ? 'checked' : ''} onchange="toggleModule('${mod.id}', this.checked)">
+        </td>
+        <td>
+          ${mod.actions.includes('create') ? `
+            <label class="toggle">
+              <input type="checkbox" data-module="${mod.id}" data-action="create"
+                ${p.create ? 'checked' : ''} ${!hasAny ? 'disabled' : ''} onchange="onToggleChange()">
+              <span class="slider"></span>
+            </label>` : '<span style="color:#c8c6c4">—</span>'}
+        </td>
+        <td>
+          ${mod.actions.includes('edit') ? `
+            <label class="toggle">
+              <input type="checkbox" data-module="${mod.id}" data-action="edit"
+                ${p.edit ? 'checked' : ''} ${!hasAny ? 'disabled' : ''} onchange="onToggleChange()">
+              <span class="slider"></span>
+            </label>` : '<span style="color:#c8c6c4">—</span>'}
+        </td>
+        <td>
+          ${mod.actions.includes('delete') ? `
+            <label class="toggle">
+              <input type="checkbox" data-module="${mod.id}" data-action="delete"
+                ${p.delete ? 'checked' : ''} ${!hasAny ? 'disabled' : ''} onchange="onToggleChange()">
+              <span class="slider"></span>
+            </label>` : '<span style="color:#c8c6c4">—</span>'}
+        </td>
+      </tr>`;
+  }).join('');
+}
+
+function toggleModule(moduleId, enabled) {
+  const row = document.querySelector(`tr[data-module="${moduleId}"]`);
+  const toggles = row.querySelectorAll('.toggle input');
+  const mod = config.modules.find(m => m.id === moduleId);
+
+  row.classList.toggle('disabled', !enabled);
+  toggles.forEach(t => {
+    t.disabled = !enabled;
+    if (enabled) {
+      // Enable all available actions by default when enabling module
+      t.checked = true;
+    } else {
+      t.checked = false;
+    }
+  });
+
+  // Uncheck full access if manually toggling
+  document.getElementById('fullAccessCheck').checked = false;
+  updateFullAccessState();
+}
+
+function onToggleChange() {
+  document.getElementById('fullAccessCheck').checked = false;
+  updateFullAccessState();
+}
+
+function toggleFullAccess() {
+  const cb = document.getElementById('fullAccessCheck');
+  cb.checked = !cb.checked;
+
+  if (cb.checked) {
+    renderPermTable(buildFullPerms());
+  }
+  updateFullAccessState();
+}
+
+function updateFullAccessState() {
+  const isFullAccess = document.getElementById('fullAccessCheck').checked;
+  const toggle = document.getElementById('fullAccessToggle');
+  toggle.classList.toggle('active', isFullAccess);
+
+  const table = document.getElementById('permTable');
+  table.style.opacity = isFullAccess ? '0.4' : '1';
+  table.style.pointerEvents = isFullAccess ? 'none' : 'auto';
+}
+
+function readPermTable() {
+  const perms = {};
+  config.modules.forEach(mod => {
+    const row = document.querySelector(`tr[data-module="${mod.id}"]`);
+    const enable = row.querySelector('.module-enable');
+    if (!enable.checked) return;
+
+    const p = {};
+    mod.actions.forEach(action => {
+      const toggle = row.querySelector(`input[data-action="${action}"]`);
+      if (toggle && toggle.checked) p[action] = true;
+    });
+
+    if (Object.keys(p).length > 0) perms[mod.id] = p;
+  });
+  return perms;
+}
+
+function saveUser() {
+  const code = document.getElementById('editCode').value.trim().toUpperCase();
+  if (!code) { alert('User code is required'); return; }
+
+  const name = document.getElementById('editName').value.trim();
+  const pat = document.getElementById('editPat').value.trim();
+  const notes = document.getElementById('editNotes').value.trim();
+  const isFullAccess = document.getElementById('fullAccessCheck').checked;
+
+  if (isFullAccess) {
+    config.users[code] = { name, pat, writeAllow: '*', permissions: {}, notes };
+  } else {
+    const permissions = readPermTable();
+    const enabledModules = Object.keys(permissions);
+    const writeAllow = enabledModules.join(',');
+    config.users[code] = { name, pat, writeAllow, permissions, notes };
+  }
+
+  closeModal();
+  saveConfig();
+  render();
+}
+
+function deleteUser(code) {
+  if (!confirm(`Remove ${code} (${config.users[code]?.name})?\nThey will fall back to default (read-only) permissions.`)) return;
+  delete config.users[code];
+  saveConfig();
+  render();
+}
+
+function closeModal() { document.getElementById('userModal').classList.remove('active'); }
+
+// ─── Config snippet ───────────────────────────────────────────
+
+function showConfig(code) {
+  const user = config.users[code];
+  const patValue = user.pat || "PASTE_THEIR_PAT_TOKEN_HERE";
+  const obj = {
+    mcpServers: {
+      "prospect-crm": {
+        command: "node",
+        args: ["\\\\192.168.1.155\\sfm_data\\prospect-mcp\\dist\\index.js"],
+        env: {
+          PROSPECT_PAT: patValue,
+          PROSPECT_BASE_URL: "https://crm-odata-v1.prospect365.com",
+          PROSPECT_USER_ID: code
+        }
+      }
+    }
+  };
+  document.getElementById('configSnippet').textContent = JSON.stringify(obj, null, 2);
+
+  // Update the help text based on whether PAT is stored
+  const helpText = user.pat
+    ? 'This config is ready to paste — the PAT token is included.'
+    : 'Replace <code>PASTE_THEIR_PAT_TOKEN_HERE</code> with the user\'s Personal Access Token from Prospect CRM.';
+  document.querySelector('#configModal .modal-body p:last-child').innerHTML =
+    `<span style="font-size:12px; color:#605e5c;">${helpText}</span>`;
+
+  document.getElementById('configModal').classList.add('active');
+}
+
+function closeConfigModal() { document.getElementById('configModal').classList.remove('active'); }
+
+function copyConfig() {
+  navigator.clipboard.writeText(document.getElementById('configSnippet').textContent).then(() => {
+    showStatus('Config copied to clipboard', 'success');
+    closeConfigModal();
+  });
+}
+
+loadConfig();
+</script>
+</body>
+</html>

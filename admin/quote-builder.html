@@ -1,0 +1,656 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>ProspectCRM — Quote Prompt Builder</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font-family: 'Segoe UI', Tahoma, sans-serif; background: #f3f2f1; color: #323130; }
+
+  .header { background: #0078d4; color: white; padding: 16px 24px; }
+  .header h1 { font-size: 18px; font-weight: 600; }
+  .header .subtitle { font-size: 12px; opacity: 0.8; }
+
+  .container { max-width: 900px; margin: 24px auto; padding: 0 16px; }
+
+  .card { background: white; border-radius: 8px; border: 1px solid #edebe9; margin-bottom: 16px; overflow: hidden; }
+  .card-header { padding: 14px 20px; border-bottom: 1px solid #edebe9; background: #f9f9f9; }
+  .card-header h2 { font-size: 15px; font-weight: 600; }
+  .card-body { padding: 20px; }
+
+  .row { display: flex; gap: 12px; margin-bottom: 12px; }
+  .row .field { flex: 1; }
+
+  .field { margin-bottom: 14px; }
+  .field label { display: block; font-size: 13px; font-weight: 600; margin-bottom: 4px; }
+  .field input, .field select, .field textarea {
+    width: 100%; padding: 8px 10px; border: 1px solid #8a8886; border-radius: 4px; font-size: 13px; font-family: inherit;
+  }
+  .field input:focus, .field select:focus, .field textarea:focus { border-color: #0078d4; outline: none; }
+  .field textarea { min-height: 80px; resize: vertical; font-family: 'Consolas', monospace; }
+  .field .hint { font-size: 11px; color: #605e5c; margin-top: 3px; }
+
+  .search-group { position: relative; }
+  .search-results { position: absolute; top: 100%; left: 0; right: 0; background: white; border: 1px solid #8a8886; border-top: none; border-radius: 0 0 4px 4px; max-height: 260px; overflow-y: auto; z-index: 10; display: none; box-shadow: 0 4px 12px rgba(0,0,0,0.1); }
+  .search-results.active { display: block; }
+  .search-result { padding: 10px 12px; cursor: pointer; border-bottom: 1px solid #f3f2f1; font-size: 13px; }
+  .search-result:hover { background: #e6f2fb; }
+  .search-result .main { font-weight: 600; }
+  .search-result .sub { font-size: 11px; color: #605e5c; }
+  .search-result.loading { color: #605e5c; font-style: italic; cursor: default; }
+  .search-result.empty { color: #605e5c; font-style: italic; cursor: default; }
+
+  .selected-chip { display: inline-flex; align-items: center; gap: 8px; padding: 6px 10px; background: #e6f2fb; border: 1px solid #0078d4; border-radius: 16px; font-size: 12px; margin-top: 6px; }
+  .selected-chip .remove { cursor: pointer; font-weight: 700; color: #0078d4; }
+
+  button { padding: 8px 16px; border-radius: 4px; border: 1px solid #8a8886; background: white; cursor: pointer; font-size: 13px; }
+  button:hover { background: #f3f2f1; }
+  button.primary { background: #0078d4; color: white; border-color: #0078d4; }
+  button.primary:hover { background: #106ebe; }
+  button.big { padding: 12px 24px; font-size: 14px; font-weight: 600; width: 100%; }
+
+  .product-row { display: flex; gap: 8px; margin-bottom: 8px; align-items: center; }
+  .product-row input { flex: 1; }
+  .product-row button { flex-shrink: 0; }
+
+  .group-card { border: 1px solid #edebe9; border-radius: 4px; padding: 12px; margin-bottom: 12px; background: #fafafa; }
+  .group-card .group-title { display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px; }
+  .group-card .group-title input { flex: 1; margin-right: 8px; font-weight: 600; }
+
+  .toggle-row { display: flex; gap: 16px; flex-wrap: wrap; margin-top: 4px; }
+  .toggle-opt { display: flex; align-items: center; gap: 4px; font-size: 13px; cursor: pointer; }
+
+  .api-status { padding: 10px 16px; font-size: 12px; margin-bottom: 16px; border-radius: 4px; }
+  .api-status.connected { background: #e8f5e0; color: #498205; }
+  .api-status.error { background: #fde7e9; color: #d13438; }
+
+  .output-card { background: #fff4e5; border: 1px solid #ca5010; }
+  .output-card .card-header { background: #fff4e5; border-bottom-color: #ca5010; }
+
+  .hidden { display: none !important; }
+</style>
+</head>
+<body>
+
+<div class="header">
+  <h1>ProspectCRM — Quote Prompt Builder</h1>
+  <div class="subtitle">Fill in the form, click Generate, paste the result into Claude Desktop</div>
+</div>
+
+<div class="container">
+
+  <div id="apiStatus" class="api-status">Checking API connection...</div>
+
+  <!-- Customer & Contact -->
+  <div class="card">
+    <div class="card-header"><h2>1. Customer & Contact</h2></div>
+    <div class="card-body">
+
+      <div class="field search-group">
+        <label>Company / School — start typing to search</label>
+        <input type="text" id="companySearch" placeholder="e.g. Abbey Park" autocomplete="off">
+        <div class="search-results" id="companyResults"></div>
+        <div id="selectedCompany"></div>
+      </div>
+
+      <div class="field search-group" id="contactField" style="display:none">
+        <label>Contact at this company</label>
+        <select id="contactSelect">
+          <option value="">-- select a contact --</option>
+        </select>
+        <div class="hint">Or add a new contact below</div>
+      </div>
+
+      <div id="newContactFields" style="display:none; padding: 12px; background: #f9f9f9; border-radius: 4px; margin-top: 8px;">
+        <div style="font-weight:600; font-size:13px; margin-bottom:8px;">New Contact Details</div>
+        <div class="row">
+          <div class="field" style="flex:0 0 80px;">
+            <label>Title</label>
+            <input type="text" id="newTitle" placeholder="Mr">
+          </div>
+          <div class="field">
+            <label>First name</label>
+            <input type="text" id="newForename">
+          </div>
+          <div class="field">
+            <label>Surname</label>
+            <input type="text" id="newSurname">
+          </div>
+        </div>
+        <div class="field">
+          <label>Job title</label>
+          <input type="text" id="newJobTitle">
+        </div>
+        <div class="row">
+          <div class="field">
+            <label>Email</label>
+            <input type="email" id="newEmail">
+          </div>
+          <div class="field">
+            <label>Phone</label>
+            <input type="text" id="newPhone">
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Opportunity -->
+  <div class="card">
+    <div class="card-header"><h2>2. Opportunity</h2></div>
+    <div class="card-body">
+
+      <div class="field">
+        <label>Description (generic)</label>
+        <input type="text" id="oppDescription" placeholder="e.g. Wall Pockets">
+        <div class="hint">Keep it generic — product category only. Same description used for opportunity AND quote.</div>
+      </div>
+
+      <div class="row">
+        <div class="field">
+          <label>Type</label>
+          <select id="oppType"></select>
+        </div>
+        <div class="field">
+          <label>Status</label>
+          <select id="oppStatus"></select>
+        </div>
+      </div>
+
+      <div class="row">
+        <div class="field">
+          <label>Size (value range)</label>
+          <select id="oppSize"></select>
+        </div>
+        <div class="field">
+          <label>Margin Band</label>
+          <select id="oppMargin"></select>
+        </div>
+      </div>
+
+      <div class="field">
+        <label>Source</label>
+        <select id="oppSource"></select>
+      </div>
+
+      <div class="field" id="sourceActivityField" style="display:none">
+        <label>Exhibition / Event name</label>
+        <input type="text" id="sourceActivity" placeholder="e.g. Schools and Academies Show Nov 2026">
+      </div>
+
+      <div class="field">
+        <label>Salesperson</label>
+        <select id="salesperson">
+          <option value="">Use my default</option>
+        </select>
+      </div>
+    </div>
+  </div>
+
+  <!-- Quote Contents -->
+  <div class="card">
+    <div class="card-header"><h2>3. Quote Contents</h2></div>
+    <div class="card-body">
+
+      <div class="field">
+        <label>Layout</label>
+        <div class="toggle-row">
+          <label class="toggle-opt"><input type="radio" name="layout" value="single" checked onchange="renderGroups()"> Single group (one quote, one customer option)</label>
+          <label class="toggle-opt"><input type="radio" name="layout" value="multi" onchange="renderGroups()"> Multiple options (customer picks between groups with subtotals)</label>
+        </div>
+      </div>
+
+      <div id="groupsContainer"></div>
+
+      <button onclick="addGroup()" id="addGroupBtn" style="display:none">+ Add another option group</button>
+    </div>
+  </div>
+
+  <!-- Options -->
+  <div class="card">
+    <div class="card-header"><h2>4. Quote Options</h2></div>
+    <div class="card-body">
+
+      <div class="field" id="versaPlyField">
+        <label>VERSAPLY required? (wall pockets only)</label>
+        <div class="toggle-row">
+          <label class="toggle-opt"><input type="radio" name="versaply" value="yes"> Yes</label>
+          <label class="toggle-opt"><input type="radio" name="versaply" value="no" checked> No</label>
+          <label class="toggle-opt"><input type="radio" name="versaply" value="na"> Not applicable</label>
+        </div>
+      </div>
+
+      <div class="field">
+        <label>Itemisation</label>
+        <div class="toggle-row">
+          <label class="toggle-opt"><input type="radio" name="itemised" value="itemised" checked> Itemised (show prices per line)</label>
+          <label class="toggle-opt"><input type="radio" name="itemised" value="non-itemised"> Non-itemised (group total only)</label>
+        </div>
+      </div>
+
+      <div class="field">
+        <label>Margin</label>
+        <div class="toggle-row">
+          <label class="toggle-opt"><input type="radio" name="margin" value="standard" checked onchange="toggleBespoke()"> Standard (catalogue prices)</label>
+          <label class="toggle-opt"><input type="radio" name="margin" value="bespoke" onchange="toggleBespoke()"> Bespoke percentage</label>
+        </div>
+        <input type="text" id="bespokePercent" placeholder="e.g. 30%" style="margin-top:8px; display:none; max-width: 200px;">
+      </div>
+    </div>
+  </div>
+
+  <!-- Generate -->
+  <button class="primary big" onclick="generatePrompt()">Generate Prompt</button>
+
+  <!-- Output -->
+  <div class="card output-card" id="outputCard" style="display:none; margin-top: 16px;">
+    <div class="card-header">
+      <h2>Your Prompt — Copy and paste into Claude Desktop</h2>
+    </div>
+    <div class="card-body">
+      <textarea id="outputPrompt" readonly style="min-height: 400px; font-size: 12px;"></textarea>
+      <div style="display:flex; gap:8px; margin-top:12px;">
+        <button class="primary" onclick="copyPrompt()">Copy to Clipboard</button>
+        <button onclick="document.getElementById('outputCard').style.display='none'">Close</button>
+      </div>
+    </div>
+  </div>
+
+</div>
+
+<script>
+// ─── API helpers ──────────────────────────────────────────────
+// All CRM calls go through the local admin server, which proxies them
+// using the PAT stored in permissions.json. Avoids CORS and keeps the
+// token off the browser.
+
+let selectedCompany = null;
+
+async function loadConfig() {
+  try {
+    // Test the proxy works by hitting a simple endpoint
+    await apiGet('/Users?$top=1&$select=UserCode');
+    setApiStatus('connected', 'Connected to Prospect CRM');
+    loadLookups();
+    loadUsers();
+  } catch (err) {
+    setApiStatus('error', 'Cannot reach CRM — ' + err.message + '. Make sure a user with a PAT is configured in the admin portal.');
+  }
+}
+
+function setApiStatus(type, msg) {
+  const el = document.getElementById('apiStatus');
+  el.className = 'api-status ' + type;
+  el.textContent = msg;
+}
+
+async function apiGet(path) {
+  const resp = await fetch('/api/crm?path=' + encodeURIComponent(path));
+  if (!resp.ok) {
+    const body = await resp.text();
+    throw new Error('API error ' + resp.status + ': ' + body.substring(0, 100));
+  }
+  return resp.json();
+}
+
+// ─── Lookups ──────────────────────────────────────────────────
+
+const LOOKUPS = {
+  types: [
+    { label: 'Acoustic', val: 'Acoustic' },
+    { label: 'Breakout Furniture', val: 'Breakout Furniture' },
+    { label: 'Classroom Furniture', val: 'Classroom Furniture' },
+    { label: 'Design Fees', val: 'Design Fees' },
+    { label: 'Dining Furniture (Non Versa)', val: 'Dining Furniture (Non Versa)' },
+    { label: 'Early Years', val: 'Early Years' },
+    { label: 'FF&E', val: 'FF&E' },
+    { label: 'IT Furniture', val: 'IT Furniture' },
+    { label: 'Lab/Food Tech', val: 'Lab/Food Tech' },
+    { label: 'Library', val: 'Library' },
+    { label: 'Office Furniture', val: 'Office Furniture' },
+    { label: 'Outdoor', val: 'Outdoor' },
+    { label: 'Reception / Staffroom Furniture', val: 'Reception / Staffroom Furniture' },
+    { label: 'Refurb Works', val: 'Refurb Works' },
+    { label: 'Seating', val: 'Seating' },
+    { label: 'Storage', val: 'Storage' },
+    { label: 'Versa and Interiors', val: 'Versa and Interiors' },
+    { label: 'Versa Dining Furniture', val: 'Versa Dining Furniture' },
+    { label: 'Versa Maintenance', val: 'Versa Maintenance' },
+    { label: 'Washroom Refurb', val: 'Washroom Refurb' },
+    { label: 'Workspace Project (Fitout)', val: 'Workspace Project (Fitout)' },
+  ],
+  statuses: [
+    { label: 'Potential Opportunity (WITS)', val: 'Potential Opportunity (WITS)' },
+    { label: 'Developing Opportunity', val: 'Developing Opportunity' },
+    { label: 'Qualified Opportunity', val: 'Qualified Opportunity' },
+    { label: 'Awaiting Download', val: 'Awaiting Download' },
+    { label: 'Design', val: 'Design' },
+    { label: 'Quoting/Estimating', val: 'Quoting/Estimating' },
+  ],
+  sizes: [
+    { label: 'Up to 1k', val: 'Up to 1k' },
+    { label: '1k to 5k', val: '1k to 5k' },
+    { label: '5k to 15k', val: '5k to 15k' },
+    { label: '15k to 30k', val: '15k to 30k' },
+    { label: '30k to 50k', val: '30k to 50k' },
+    { label: '50k to 100k', val: '50k to 100k' },
+    { label: '100k to 250k', val: '100k to 250k' },
+    { label: '250k to 500k', val: '250k to 500k' },
+    { label: '500k+', val: '500k+' },
+    { label: 'Unknown', val: 'Unknown' },
+  ],
+  sources: [
+    { label: 'Sales Person Generated', val: 'Sales Person Generated' },
+    { label: 'Existing Client Enquiry', val: 'Existing Client Enquiry' },
+    { label: 'Website', val: 'Website' },
+    { label: 'Exhibition', val: 'Exhibition' },
+    { label: 'Recommendation', val: 'Recommendation' },
+    { label: 'Telemarketing', val: 'Telemarketing' },
+    { label: 'E-Shot', val: 'E-Shot' },
+    { label: 'LinkedIn', val: 'LinkedIn' },
+    { label: 'NBS', val: 'NBS' },
+    { label: 'Direct Mail Campaign', val: 'Direct Mail Campaign' },
+    { label: 'WG Driver', val: 'WG Driver' },
+  ],
+};
+
+function loadLookups() {
+  populateSelect('oppType', LOOKUPS.types);
+  populateSelect('oppStatus', LOOKUPS.statuses);
+  populateSelect('oppSize', LOOKUPS.sizes);
+  populateSelect('oppMargin', LOOKUPS.sizes);
+  populateSelect('oppSource', LOOKUPS.sources);
+
+  document.getElementById('oppSource').addEventListener('change', e => {
+    document.getElementById('sourceActivityField').style.display =
+      e.target.value === 'Exhibition' ? 'block' : 'none';
+  });
+
+  renderGroups();
+}
+
+function populateSelect(id, options) {
+  const sel = document.getElementById(id);
+  sel.innerHTML = '<option value="">-- select --</option>' +
+    options.map(o => `<option value="${o.val}">${o.label}</option>`).join('');
+}
+
+async function loadUsers() {
+  try {
+    const res = await apiGet('/Users?$select=UserCode,UserName&$filter=Obsolete eq 0&$orderby=UserName');
+    const sel = document.getElementById('salesperson');
+    res.value.forEach(u => {
+      const opt = document.createElement('option');
+      opt.value = u.UserName;
+      opt.textContent = `${u.UserName} (${u.UserCode})`;
+      sel.appendChild(opt);
+    });
+  } catch (err) {
+    console.error('Failed to load users', err);
+  }
+}
+
+// ─── Company search ───────────────────────────────────────────
+
+let searchTimer = null;
+document.getElementById('companySearch').addEventListener('input', e => {
+  const term = e.target.value.trim();
+  clearTimeout(searchTimer);
+  if (term.length < 2) {
+    document.getElementById('companyResults').classList.remove('active');
+    return;
+  }
+  searchTimer = setTimeout(() => searchCompanies(term), 300);
+});
+
+async function searchCompanies(term) {
+  const resultsEl = document.getElementById('companyResults');
+  resultsEl.innerHTML = '<div class="search-result loading">Searching...</div>';
+  resultsEl.classList.add('active');
+
+  try {
+    const safeTerm = term.replace(/'/g, "''");
+    const res = await apiGet(`/Divisions?$filter=contains(Name,'${encodeURIComponent(safeTerm)}') and StatusFlag ne 'D'&$expand=Address($select=AddressLine1,AddressLine3,AddressLine4,Postcode)&$select=DivisionId,Name,PhoneNumber&$top=10&$orderby=Name`);
+
+    if (res.value.length === 0) {
+      resultsEl.innerHTML = '<div class="search-result empty">No matches found</div>';
+      return;
+    }
+
+    resultsEl.innerHTML = res.value.map(d => {
+      const addr = d.Address || {};
+      const loc = [addr.AddressLine3, addr.AddressLine4, addr.Postcode].filter(Boolean).join(', ');
+      return `<div class="search-result" onclick='selectCompany(${JSON.stringify(d).replace(/'/g, "&apos;")})'>
+        <div class="main">${d.Name}</div>
+        <div class="sub">${loc || 'No address'}</div>
+      </div>`;
+    }).join('');
+  } catch (err) {
+    resultsEl.innerHTML = '<div class="search-result empty">Search failed: ' + err.message + '</div>';
+  }
+}
+
+function selectCompany(d) {
+  selectedCompany = d;
+  document.getElementById('companyResults').classList.remove('active');
+  document.getElementById('companySearch').value = '';
+
+  const addr = d.Address || {};
+  const loc = [addr.AddressLine3, addr.AddressLine4, addr.Postcode].filter(Boolean).join(', ');
+  document.getElementById('selectedCompany').innerHTML =
+    `<div class="selected-chip"><span><strong>${d.Name}</strong> — ${loc}</span><span class="remove" onclick="clearCompany()">×</span></div>`;
+
+  loadContacts(d.DivisionId);
+}
+
+function clearCompany() {
+  selectedCompany = null;
+  document.getElementById('selectedCompany').innerHTML = '';
+  document.getElementById('contactField').style.display = 'none';
+  document.getElementById('newContactFields').style.display = 'none';
+}
+
+// ─── Contact list ─────────────────────────────────────────────
+
+async function loadContacts(divisionId) {
+  document.getElementById('contactField').style.display = 'block';
+  const sel = document.getElementById('contactSelect');
+  sel.innerHTML = '<option value="">Loading contacts...</option>';
+
+  try {
+    const res = await apiGet(`/Contacts?$filter=DivisionId eq ${divisionId} and StatusFlag ne 'D'&$select=ContactId,Forename,Surname,JobTitle,Email,PhoneNumber&$top=50&$orderby=Surname`);
+
+    sel.innerHTML = '<option value="">-- select a contact --</option>';
+    res.value.forEach(c => {
+      const name = `${c.Forename || ''} ${c.Surname || ''}`.trim();
+      const jobTitle = c.JobTitle ? ` — ${c.JobTitle}` : '';
+      const opt = document.createElement('option');
+      opt.value = JSON.stringify(c);
+      opt.textContent = `${name}${jobTitle}`;
+      sel.appendChild(opt);
+    });
+    const newOpt = document.createElement('option');
+    newOpt.value = '__new__';
+    newOpt.textContent = '+ Add a new contact';
+    sel.appendChild(newOpt);
+
+    sel.onchange = () => {
+      document.getElementById('newContactFields').style.display =
+        sel.value === '__new__' ? 'block' : 'none';
+    };
+  } catch (err) {
+    sel.innerHTML = '<option value="">Failed to load: ' + err.message + '</option>';
+  }
+}
+
+// ─── Quote groups / products ──────────────────────────────────
+
+let groups = [{ title: 'Products', products: [''] }];
+
+function renderGroups() {
+  const isMulti = document.querySelector('input[name="layout"]:checked').value === 'multi';
+  document.getElementById('addGroupBtn').style.display = isMulti ? 'inline-block' : 'none';
+
+  if (!isMulti && groups.length > 1) {
+    groups = [groups[0]];
+  }
+  if (groups.length === 0) {
+    groups = [{ title: 'Products', products: [''] }];
+  }
+
+  const container = document.getElementById('groupsContainer');
+  container.innerHTML = groups.map((g, gi) => `
+    <div class="group-card">
+      <div class="group-title">
+        <input type="text" value="${escapeAttr(g.title)}" placeholder="Group/Option title" oninput="updateGroupTitle(${gi}, this.value)">
+        ${isMulti && groups.length > 1 ? `<button onclick="removeGroup(${gi})">Remove</button>` : ''}
+      </div>
+      <div>
+        ${g.products.map((p, pi) => `
+          <div class="product-row">
+            <input type="text" value="${escapeAttr(p)}" placeholder="e.g. 2x double 14ft wall pockets" oninput="updateProduct(${gi}, ${pi}, this.value)">
+            ${g.products.length > 1 ? `<button onclick="removeProduct(${gi}, ${pi})">×</button>` : ''}
+          </div>
+        `).join('')}
+        <button onclick="addProduct(${gi})">+ Add product line</button>
+      </div>
+    </div>
+  `).join('');
+}
+
+function escapeAttr(s) { return (s || '').replace(/"/g, '&quot;'); }
+function addGroup() { groups.push({ title: `Option ${groups.length + 1}`, products: [''] }); renderGroups(); }
+function removeGroup(gi) { groups.splice(gi, 1); renderGroups(); }
+function addProduct(gi) { groups[gi].products.push(''); renderGroups(); }
+function removeProduct(gi, pi) { groups[gi].products.splice(pi, 1); renderGroups(); }
+function updateGroupTitle(gi, v) { groups[gi].title = v; }
+function updateProduct(gi, pi, v) { groups[gi].products[pi] = v; }
+
+// ─── Bespoke margin toggle ────────────────────────────────────
+
+function toggleBespoke() {
+  const val = document.querySelector('input[name="margin"]:checked').value;
+  document.getElementById('bespokePercent').style.display = val === 'bespoke' ? 'block' : 'none';
+}
+
+// ─── Generate prompt ──────────────────────────────────────────
+
+function generatePrompt() {
+  if (!selectedCompany) { alert('Please pick a company first'); return; }
+
+  const contactSel = document.getElementById('contactSelect');
+  let contactLine = '';
+  let newContactLines = '';
+
+  if (contactSel.value === '__new__') {
+    const title = document.getElementById('newTitle').value.trim();
+    const forename = document.getElementById('newForename').value.trim();
+    const surname = document.getElementById('newSurname').value.trim();
+    const jobTitle = document.getElementById('newJobTitle').value.trim();
+    const email = document.getElementById('newEmail').value.trim();
+    const phone = document.getElementById('newPhone').value.trim();
+
+    if (!forename || !surname) { alert('Please fill in first name and surname for the new contact'); return; }
+
+    contactLine = `- Contact (new — doesn't exist yet):`;
+    newContactLines = [
+      title ? `  - Title: ${title}` : '',
+      `  - First name: ${forename}`,
+      `  - Surname: ${surname}`,
+      jobTitle ? `  - Job title: ${jobTitle}` : '',
+      email ? `  - Email: ${email}` : '',
+      phone ? `  - Phone: ${phone}` : '',
+    ].filter(Boolean).join('\n');
+  } else if (contactSel.value) {
+    const c = JSON.parse(contactSel.value);
+    contactLine = `- Contact name: ${c.Forename} ${c.Surname}`.trim();
+  } else {
+    alert('Please pick a contact or add a new one'); return;
+  }
+
+  const oppDesc = document.getElementById('oppDescription').value.trim();
+  if (!oppDesc) { alert('Please fill in the opportunity description'); return; }
+
+  const fields = ['oppType', 'oppStatus', 'oppSize', 'oppMargin', 'oppSource'];
+  for (const f of fields) {
+    if (!document.getElementById(f).value) { alert('Please select all opportunity fields'); return; }
+  }
+
+  const source = document.getElementById('oppSource').value;
+  const sourceActivity = document.getElementById('sourceActivity').value.trim();
+  if (source === 'Exhibition' && !sourceActivity) { alert('Please specify the exhibition/event name'); return; }
+
+  const salesperson = document.getElementById('salesperson').value || 'Use my default';
+  const layout = document.querySelector('input[name="layout"]:checked').value;
+  const versaply = document.querySelector('input[name="versaply"]:checked').value;
+  const itemised = document.querySelector('input[name="itemised"]:checked').value;
+  const margin = document.querySelector('input[name="margin"]:checked').value;
+  const bespokePct = document.getElementById('bespokePercent').value.trim();
+
+  // Build products section
+  let productsSection = '- Products requested';
+  if (layout === 'single') {
+    productsSection += ':\n' + groups[0].products.filter(p => p.trim()).map(p => `  - ${p}`).join('\n');
+  } else {
+    productsSection += ' (multiple option groups):\n';
+    groups.forEach(g => {
+      const validProducts = g.products.filter(p => p.trim());
+      if (validProducts.length === 0) return;
+      productsSection += `  - ${g.title}:\n`;
+      validProducts.forEach(p => { productsSection += `    - ${p}\n`; });
+    });
+    productsSection = productsSection.trimEnd();
+  }
+
+  const addr = selectedCompany.Address || {};
+  const postcode = addr.Postcode || '';
+
+  const prompt = [
+    `Create a new opportunity and quote for the following:`,
+    ``,
+    `CUSTOMER`,
+    `- Account / School name: ${selectedCompany.Name}`,
+    postcode ? `- Postcode: ${postcode}` : '',
+    contactLine,
+    newContactLines,
+    ``,
+    `OPPORTUNITY`,
+    `- Description: ${oppDesc}`,
+    `- Type: ${document.getElementById('oppType').value}`,
+    `- Status: ${document.getElementById('oppStatus').value}`,
+    `- Size: ${document.getElementById('oppSize').value}`,
+    `- Margin Band: ${document.getElementById('oppMargin').value}`,
+    `- Source: ${source}`,
+    source === 'Exhibition' ? `- Source activity: ${sourceActivity}` : '',
+    ``,
+    `QUOTE CONTENTS`,
+    productsSection,
+    ``,
+    `QUOTE OPTIONS`,
+    `- Groups / Options layout: ${layout === 'single' ? 'Single group' : 'Multiple options with subtotals'}`,
+    versaply !== 'na' ? `- VERSAPLY required: ${versaply === 'yes' ? 'Yes' : 'No'}` : '',
+    `- Itemised or non-itemised: ${itemised === 'itemised' ? 'Itemised' : 'Non-itemised'}`,
+    `- Margin: ${margin === 'standard' ? 'Standard' : `Bespoke ${bespokePct}`}`,
+    `- Salesperson: ${salesperson}`,
+    ``,
+    `Please create everything and give me the quote link with the recommended template to merge with.`,
+  ].filter(Boolean).join('\n');
+
+  document.getElementById('outputPrompt').value = prompt;
+  document.getElementById('outputCard').style.display = 'block';
+  document.getElementById('outputCard').scrollIntoView({ behavior: 'smooth' });
+}
+
+function copyPrompt() {
+  const ta = document.getElementById('outputPrompt');
+  navigator.clipboard.writeText(ta.value).then(() => {
+    alert('Copied! Paste into Claude Desktop (ProspectCRM project).');
+  });
+}
+
+// ─── Init ─────────────────────────────────────────────────────
+loadConfig();
+</script>
+</body>
+</html>

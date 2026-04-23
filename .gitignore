@@ -1,0 +1,7 @@
+node_modules/
+dist/
+.env
+*.js.map
+smoke-test-output/
+reference/tmp/
+config/permissions.backup-*.json
