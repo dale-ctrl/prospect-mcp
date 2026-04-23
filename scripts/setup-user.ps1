@@ -1,11 +1,12 @@
 <#
 .SYNOPSIS
-One-click setup of the Prospect CRM MCP connector for a new user.
+One-click setup of the Prospect CRM MCP connector on a user's machine.
 
 .DESCRIPTION
-Run from the NAS share:
+Run this yourself (as admin) on each new user's PC after Node.js and
+Claude Desktop are installed. From PowerShell:
 
-    \\SYNOLOGY-NAS\IT\prospect-mcp\scripts\setup-user.ps1
+    \\192.168.1.155\sfm_data\prospect-mcp\scripts\setup-user.ps1
 
 or from a mapped drive:
 
@@ -16,20 +17,21 @@ Does the following, in order:
   1. Verifies Node.js 18+ is on PATH (required — the MCP server is a
      Node process launched by Claude Desktop).
   2. Verifies Claude Desktop is installed.
-  3. Prompts for the user's CRM user code (e.g. ML, RL, JM).
-  4. Prompts for their Prospect365 PAT (hidden input).
+  3. Prompts for the CRM user code (e.g. ML, RL, JM).
+  4. Prompts for the user's Prospect365 PAT (hidden input).
   5. Backs up any existing %APPDATA%\Claude\claude_desktop_config.json.
   6. Merges a `prospect-crm` MCP server entry into the config without
      disturbing any other MCP entries the user may have.
-  7. Prints a one-line hand-off: "Tell Dale your user code and he'll
-     grant your permissions in the Admin Portal."
+  7. Prints a reminder that you still need to add them + set their
+     permissions in the Admin Portal on your own machine.
 
 Idempotent — re-running it updates the PAT without duplicating entries.
-If the user later gets a new PAT, they just run it again.
+If the user later gets a new PAT, run it again.
 
 .NOTES
-Does NOT touch permissions.json. That stays with the admin (Dale) so
-access grants remain a deliberate trust decision, not a self-serve one.
+Does NOT touch permissions.json. That stays with the admin so access
+grants remain a deliberate decision you make in the portal, not a
+self-serve step.
 #>
 
 param(
@@ -214,18 +216,23 @@ Write-Ok "Wrote $configFile"
 # ── Step 6: Done ──────────────────────────────────────────────
 Write-Host ""
 Write-Host "=================================================================" -ForegroundColor Green
-Write-Host "  Setup complete for user $UserCode" -ForegroundColor Green
+Write-Host "  Setup complete for user $UserCode on this machine" -ForegroundColor Green
 Write-Host "=================================================================" -ForegroundColor Green
 Write-Host ""
-Write-Host "Next steps:"
-Write-Host "  1. Fully quit Claude Desktop (right-click tray icon, Quit),"
-Write-Host "     then reopen from the Start menu."
-Write-Host "  2. Message Dale:"
-Write-Host "       'Please grant Prospect MCP permissions for user $UserCode.'" -ForegroundColor Yellow
-Write-Host "     He'll enable your modules in the Admin Portal (takes <1 min,"
-Write-Host "     takes effect within 5 seconds — no further restart needed)."
-Write-Host "  3. Test by asking Claude: 'search quotes for Exeter University'"
+Write-Host "Next steps (admin to-do):"
+Write-Host "  1. On your own machine, open the Admin Portal:"
+Write-Host "       http://localhost:3333" -ForegroundColor Yellow
+Write-Host "  2. Click + Add User, set code to $UserCode, fill in name and notes,"
+Write-Host "     then tick the permission toggles that match their role."
+Write-Host "  3. Hit Save. Changes are live within 5 seconds — no Claude"
+Write-Host "     Desktop restart needed here."
 Write-Host ""
-Write-Host "If anything doesn't work, paste this path into your message to Dale:"
-Write-Host "  $configFile"
+Write-Host "Next steps (this machine):"
+Write-Host "  1. Fully quit Claude Desktop on this PC (right-click tray icon,"
+Write-Host "     Quit). Closing the window is not enough."
+Write-Host "  2. Reopen Claude Desktop from the Start menu."
+Write-Host "  3. In a new chat, ask: 'search quotes for Exeter University' to"
+Write-Host "     confirm the connector loaded."
+Write-Host ""
+Write-Host "Config written to: $configFile"
 Write-Host ""
