@@ -253,24 +253,75 @@ const __indexFilename = fileURLToPath(import.meta.url);
 const __indexDirname = dirname(__indexFilename);
 const PERMISSIONS_FILE = join(__indexDirname, "..", "config", "permissions.json");
 
-// Load central permissions config
-let centralConfig: { users: Record<string, { writeAllow: string }>; defaults: { writeAllow: string } } | null = null;
-try {
-  if (existsSync(PERMISSIONS_FILE)) {
-    centralConfig = JSON.parse(readFileSync(PERMISSIONS_FILE, "utf-8"));
-    console.error(`Loaded permissions from ${PERMISSIONS_FILE}`);
-  }
-} catch (err) {
-  console.error(`Warning: Could not load permissions file: ${(err as Error).message}`);
+// ── Hot-reloading permissions cache ──────────────────────────
+//
+// `config/permissions.json` is re-read on each write-tool invocation if the
+// in-memory copy is older than PERMISSIONS_TTL_MS. Admin-portal edits on
+// Dale's machine become effective for every connected user within one TTL
+// window — no Claude Desktop restart needed.
+//
+// If a reload fails (e.g. transient NAS hiccup), the previous cached config
+// is kept so gating doesn't flap to open/closed on a single bad read.
+
+const PERMISSIONS_TTL_MS = 5_000;
+
+interface CentralConfigUser {
+  writeAllow?: string;
+  permissions?: Record<string, Record<string, boolean>>;
 }
 
-// Resolve the current user's write permissions
+interface CentralConfig {
+  users: Record<string, CentralConfigUser>;
+  defaults: CentralConfigUser;
+}
+
+let cachedConfig: CentralConfig | null = null;
+let cachedConfigLoadedAt = 0;
+let cachedConfigJson = "";
+
+function readCentralConfig(): CentralConfig | null {
+  const now = Date.now();
+  if (cachedConfig && now - cachedConfigLoadedAt < PERMISSIONS_TTL_MS) {
+    return cachedConfig;
+  }
+  try {
+    if (!existsSync(PERMISSIONS_FILE)) {
+      cachedConfigLoadedAt = now;
+      return cachedConfig; // keep prior cache if any
+    }
+    const raw = readFileSync(PERMISSIONS_FILE, "utf-8");
+    if (raw !== cachedConfigJson) {
+      const parsed = JSON.parse(raw) as CentralConfig;
+      if (cachedConfigJson !== "") {
+        console.error(`Permissions reloaded from ${PERMISSIONS_FILE}`);
+      }
+      cachedConfig = parsed;
+      cachedConfigJson = raw;
+    }
+    cachedConfigLoadedAt = now;
+    return cachedConfig;
+  } catch (err) {
+    console.error(`Warning: Could not read permissions file: ${(err as Error).message} — keeping prior cached state.`);
+    cachedConfigLoadedAt = now; // don't retry every call on a broken file
+    return cachedConfig;
+  }
+}
+
+// Prime the cache at startup so the first log line happens once, not per-request.
+{
+  const cfg = readCentralConfig();
+  if (cfg) console.error(`Loaded permissions from ${PERMISSIONS_FILE}`);
+}
+
+// Current user identity — set once at launch via env var.
 const USER_ID = (process.env.PROSPECT_USER_ID || "").toUpperCase();
 
 function resolveWriteAllow(): string {
+  const cfg = readCentralConfig();
+
   // 1. Check central config for this user
-  if (centralConfig && USER_ID && centralConfig.users[USER_ID]) {
-    return centralConfig.users[USER_ID].writeAllow || "";
+  if (cfg && USER_ID && cfg.users[USER_ID]) {
+    return cfg.users[USER_ID].writeAllow || "";
   }
 
   // 2. Fall back to environment variables (backwards compatible)
@@ -282,23 +333,36 @@ function resolveWriteAllow(): string {
   }
 
   // 3. Fall back to central config defaults
-  if (centralConfig) {
-    return centralConfig.defaults?.writeAllow || "";
+  if (cfg) {
+    return cfg.defaults?.writeAllow || "";
   }
 
   // 4. No config at all — full access (backwards compatible with no config)
   return "*";
 }
 
-const WRITE_ALLOW_RAW = resolveWriteAllow();
-const READ_ONLY = WRITE_ALLOW_RAW === "";
-const WRITE_ALLOW_ALL = WRITE_ALLOW_RAW === "*";
-const ALLOWED_MODULES = new Set(
-  WRITE_ALLOW_RAW.split(",").map(s => s.trim().toLowerCase()).filter(Boolean)
-);
+function resolveUserPermissions(): Record<string, Record<string, boolean>> {
+  const cfg = readCentralConfig();
+  if (cfg && USER_ID && cfg.users[USER_ID]) {
+    return cfg.users[USER_ID].permissions ?? {};
+  }
+  return {};
+}
 
-if (USER_ID) {
-  console.error(`User: ${USER_ID} | Write access: ${WRITE_ALLOW_ALL ? "FULL" : READ_ONLY ? "NONE (read-only)" : [...ALLOWED_MODULES].join(", ")}`);
+// One-time startup log — subsequent changes are logged only when the file
+// content actually changes (see readCentralConfig).
+{
+  const raw = resolveWriteAllow();
+  const readOnly = raw === "";
+  const allowAll = raw === "*";
+  const allowedModules = raw.split(",").map(s => s.trim().toLowerCase()).filter(Boolean);
+  if (USER_ID) {
+    console.error(
+      `User: ${USER_ID} | Write access: ${
+        allowAll ? "FULL" : readOnly ? "NONE (read-only)" : allowedModules.join(", ")
+      } | permissions hot-reload TTL ${PERMISSIONS_TTL_MS}ms`,
+    );
+  }
 }
 
 // Map each write tool name to its module and action type
@@ -337,14 +401,6 @@ const TOOL_PERMISSION_MAP: Record<string, { module: string; action: string }> = 
   send_quote_email: { module: "messaging", action: "send" },
 };
 
-// Load granular permissions from central config for this user
-const USER_PERMISSIONS: Record<string, Record<string, boolean>> = (() => {
-  if (centralConfig && USER_ID && centralConfig.users[USER_ID]) {
-    return (centralConfig.users[USER_ID] as Record<string, unknown>).permissions as Record<string, Record<string, boolean>> || {};
-  }
-  return {};
-})();
-
 // Modules whose actions have external, user-visible side effects (e.g. sending
 // real email via Prospect's merge-and-send). These must be opted into explicitly
 // via granular permissions in permissions.json, even for users whose
@@ -352,32 +408,45 @@ const USER_PERMISSIONS: Record<string, Record<string, boolean>> = (() => {
 const OPT_IN_ONLY_MODULES = new Set(["messaging"]);
 
 function isWriteAllowed(toolName: string): boolean {
-  if (READ_ONLY) return false;
+  const raw = resolveWriteAllow();
+  const readOnly = raw === "";
+  const allowAll = raw === "*";
+  const allowedModules = new Set(
+    raw.split(",").map(s => s.trim().toLowerCase()).filter(Boolean),
+  );
+  const userPermissions = resolveUserPermissions();
+
+  if (readOnly) return false;
 
   const mapping = TOOL_PERMISSION_MAP[toolName];
   if (!mapping) return false;
 
   if (OPT_IN_ONLY_MODULES.has(mapping.module)) {
-    return USER_PERMISSIONS[mapping.module]?.[mapping.action] === true;
+    return userPermissions[mapping.module]?.[mapping.action] === true;
   }
 
-  if (WRITE_ALLOW_ALL) return true;
+  if (allowAll) return true;
 
   // Check granular permissions first (new format)
-  if (USER_PERMISSIONS[mapping.module]) {
-    return USER_PERMISSIONS[mapping.module][mapping.action] === true;
+  if (userPermissions[mapping.module]) {
+    return userPermissions[mapping.module][mapping.action] === true;
   }
 
   // Fall back to module-level check (backwards compatible with writeAllow string)
-  return ALLOWED_MODULES.has(mapping.module);
+  return allowedModules.has(mapping.module);
 }
 
-// Build a human-readable permissions summary for the server description
+// Build a human-readable permissions summary for the server description.
+// Evaluated once at startup — not hot-reloaded, since the MCP server description
+// is transmitted to clients on connection. Gating itself (isWriteAllowed) is
+// always live.
 function getPermissionsSummary(): string {
-  if (READ_ONLY) return " (READ-ONLY MODE)";
-  if (WRITE_ALLOW_ALL) return "";
-  if (ALLOWED_MODULES.size === 0) return " (READ-ONLY MODE)";
-  return ` (WRITE ACCESS: ${[...ALLOWED_MODULES].join(", ")})`;
+  const raw = resolveWriteAllow();
+  if (raw === "") return " (READ-ONLY MODE)";
+  if (raw === "*") return "";
+  const modules = raw.split(",").map(s => s.trim().toLowerCase()).filter(Boolean);
+  if (modules.length === 0) return " (READ-ONLY MODE)";
+  return ` (WRITE ACCESS: ${modules.join(", ")})`;
 }
 
 const server = new McpServer({
@@ -439,12 +508,13 @@ function registerWriteTool(
   server.tool(name, taggedDesc, schema, async (args) => {
     if (!isWriteAllowed(name)) {
       const mapping = TOOL_PERMISSION_MAP[name] || { module: "unknown", action: "write" };
+      const readOnly = resolveWriteAllow() === "";
 
       return {
         content: [{ type: "text" as const, text: [
           `Permission denied: **${mapping.action}** on **${mapping.module}** module.`,
           ``,
-          READ_ONLY
+          readOnly
             ? `This connector is in READ-ONLY mode. All writes are disabled.`
             : `This user does not have ${mapping.action} permission for ${mapping.module}.`,
           ``,
