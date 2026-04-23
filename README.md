@@ -1,6 +1,6 @@
 # ProspectCRM MCP Server
 
-Connects Claude Desktop / Cowork to Prospect365 CRM for quote management at WCG.
+Connects Claude (Desktop, Code, or web via a compatible client) to Prospect365 CRM for quote management at WCG.
 
 ## What it does
 
@@ -77,7 +77,7 @@ Close and reopen Claude Desktop. The ProspectCRM tools should appear in your con
 
 ## Usage examples
 
-In Claude Desktop (Chat or Cowork), try:
+In any Claude chat with the connector enabled, try:
 
 - *"Search for quotes for Exeter University"*
 - *"Show me quote 12345 with all the line items"*

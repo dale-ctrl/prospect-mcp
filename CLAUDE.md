@@ -1,12 +1,12 @@
-# ProspectCRM MCP Server for Claude Cowork
+# ProspectCRM MCP Server
 
 ## Project Overview
 
-A local MCP server that wraps the Prospect365 OData v1 API, enabling Claude Cowork (and Claude Desktop Chat/Code) to create, read, update, and search quotes in ProspectCRM for Westcountry Group (WCG).
+A local MCP server that wraps the Prospect365 OData v1 API, enabling Claude (via Claude Desktop, Claude Code, or any other MCP-compatible client) to create, read, update, and search quotes in ProspectCRM for Westcountry Group (WCG).
 
 **Deployment model:** Code lives on the Synology NAS (mapped drive), spawned locally on each user's machine via `claude_desktop_config.json`. The server runs as a stdio-based MCP server — Claude Desktop launches it as a subprocess.
 
-**API base URL:** `https://crm-odata-v1.prospect365.com`
+**API base URL:** `https://api-v1-westeurope.prospect365.com` (tenant regional host; `client.ts` defaults here). The public-docs host `crm-odata-v1.prospect365.com` is read-only and silently no-ops on bound actions — do not use.
 **Auth:** Bearer token (PAT) via `Authorization: Bearer {token}` header
 **Rate limit:** 1200 requests per 10 minutes (sliding window), shared across all PATs for the workspace. 429 = retry.
 
