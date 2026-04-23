@@ -8,7 +8,9 @@
     "build": "tsc",
     "start": "node dist/index.js",
     "dev": "tsc --watch",
-    "test:api": "node dist/test-api.js"
+    "test:api": "node dist/test-api.js",
+    "test:messaging": "node --test dist/test-messaging.js",
+    "test:send-message": "node dist/test-send-message.js"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.12.0",

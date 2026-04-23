@@ -221,6 +221,12 @@ import {
   searchQuotingLessonsSchema, searchQuotingLessons,
 } from "./tools/knowledge.js";
 
+import {
+  sendQuoteEmailSchema, sendQuoteEmail,
+  getMergeOutputSchema, getMergeOutput,
+  listQuoteTemplatesSchema, listQuoteTemplates,
+} from "./tools/quote-messaging.js";
+
 // ─── Server Setup & Permissions ───────────────────────────────
 
 /**
@@ -328,6 +334,7 @@ const TOOL_PERMISSION_MAP: Record<string, { module: string; action: string }> = 
   update_inventory: { module: "inventory", action: "edit" },
   save_quoting_lesson: { module: "knowledge", action: "create" },
   save_product_note: { module: "knowledge", action: "create" },
+  send_quote_email: { module: "messaging", action: "send" },
 };
 
 // Load granular permissions from central config for this user
@@ -338,12 +345,23 @@ const USER_PERMISSIONS: Record<string, Record<string, boolean>> = (() => {
   return {};
 })();
 
+// Modules whose actions have external, user-visible side effects (e.g. sending
+// real email via Prospect's merge-and-send). These must be opted into explicitly
+// via granular permissions in permissions.json, even for users whose
+// writeAllow is "*". Being an admin doesn't mean "please fire customer email".
+const OPT_IN_ONLY_MODULES = new Set(["messaging"]);
+
 function isWriteAllowed(toolName: string): boolean {
   if (READ_ONLY) return false;
-  if (WRITE_ALLOW_ALL) return true;
 
   const mapping = TOOL_PERMISSION_MAP[toolName];
   if (!mapping) return false;
+
+  if (OPT_IN_ONLY_MODULES.has(mapping.module)) {
+    return USER_PERMISSIONS[mapping.module]?.[mapping.action] === true;
+  }
+
+  if (WRITE_ALLOW_ALL) return true;
 
   // Check granular permissions first (new format)
   if (USER_PERMISSIONS[mapping.module]) {
@@ -389,6 +407,7 @@ const server = new McpServer({
     `- Custom fields: Xtra fields on quotes, contacts, divisions, leads, etc. (get_xtra_fields)`,
     `- Reports: cross-module reports like "accounts without tasks for specific users" (report_accounts_without_tasks)`,
     `- System: automation workflows, webhooks, imports, entity fields (search_automation_processes, search_webhooks)`,
+    `- Quote Messaging: email a quote using its configured template, retrieve the rendered PDF (send_quote_email, get_merge_output)`,
     ``,
     `User fields (assignedTo, manager, owner, responsibleUser, etc.) accept NAMES — "Miles Liesching", "Miles", or code "ML" all work.`,
     `Territory fields accept names like "WG AREA" and resolve automatically.`,
@@ -1694,6 +1713,53 @@ server.tool("get_quoting_knowledge", "Read ALL saved quoting lessons and product
 
 server.tool("search_quoting_lessons", "Search saved quoting lessons by keyword — e.g. 'wall pocket', 'bench', 'pricing'. Use when you need to check if there's a known rule for a specific product.", searchQuotingLessonsSchema.shape,
   async (args) => { try { const result = await searchQuotingLessons(searchQuotingLessonsSchema.parse(args)); return { content: [{ type: "text" as const, text: result }] }; } catch (err) { return { content: [{ type: "text" as const, text: `Error: ${(err as Error).message}` }], isError: true }; } });
+
+// ─── Quote Messaging Tools ───────────────────────────────────
+// Wraps the Prospect365 bound actions Default.SendMessage and the MailMergeBlobs
+// download. See src/tools/MESSAGING-NOTES.md for the API investigation and the
+// v2 roadmap (per-customer-type template overrides).
+
+registerWriteTool(
+  "send_quote_email",
+  "Send a quote by email. Replicates the 7-call flow Prospect's own UI uses (MergeData × 3, Documents POST for the PDF shell, DocumentAttachments/AttachExistingDocument to stage it, SendMessage). All inputs optional except quoteId — `to` defaults to the quote's primary contact email, `subject`/`messageBody` render from the email template if omitted, `emailTemplateCode` defaults to '_EMLQC', `quoteTemplateCode` defaults to '_QUOTE'. If the user asks for a specific template (e.g. 'the Education template', 'the Versa Wall Pocket one'), call list_quote_templates first to find the matching DocumentTypeCode, then pass it via quoteTemplateCode (or emailTemplateCode for cover-email variants). Set attachPdf=false for body-only email. Returns the sent-email DocumentId + the attachment DocumentId — feed the latter to get_merge_output to retrieve the source document.",
+  sendQuoteEmailSchema.shape,
+  async (args) => {
+    try {
+      const result = await sendQuoteEmail(sendQuoteEmailSchema.parse(args));
+      return { content: [{ type: "text" as const, text: result }] };
+    } catch (err) {
+      return { content: [{ type: "text" as const, text: `Error: ${(err as Error).message}` }], isError: true };
+    }
+  }
+);
+
+server.tool(
+  "list_quote_templates",
+  "List the DocumentTemplate codes usable for quote emails on this tenant — both cover-email templates (feed the code to send_quote_email's emailTemplateCode param) and PDF/document templates (feed to quoteTemplateCode). Call this first when the user wants a non-default template, so you can match their intent to an available code.",
+  listQuoteTemplatesSchema.shape,
+  async (args) => {
+    try {
+      const result = await listQuoteTemplates(args);
+      return { content: [{ type: "text" as const, text: result }] };
+    } catch (err) {
+      return { content: [{ type: "text" as const, text: `Error: ${(err as Error).message}` }], isError: true };
+    }
+  }
+);
+
+server.tool(
+  "get_merge_output",
+  "Retrieve the rendered document blob produced by a send_quote_email call (or any other Default.SendMessage). Returns inferred filename, MIME type, and size. For large blobs (typical quote PDF is 50–500 KB), pass `saveTo` to write the document to disk and get back only metadata — otherwise base64 bytes are embedded inline in the response.",
+  getMergeOutputSchema.shape,
+  async (args) => {
+    try {
+      const result = await getMergeOutput(getMergeOutputSchema.parse(args));
+      return { content: [{ type: "text" as const, text: result }] };
+    } catch (err) {
+      return { content: [{ type: "text" as const, text: `Error: ${(err as Error).message}` }], isError: true };
+    }
+  }
+);
 
 // ─── Start Server ──────────────────────────────────────────────
 

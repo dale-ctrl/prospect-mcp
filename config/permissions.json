@@ -3,8 +3,12 @@
     "DL": {
       "name": "Dale Liesching",
       "writeAllow": "*",
-      "permissions": {},
-      "notes": "Admin — full access"
+      "permissions": {
+        "messaging": {
+          "send": true
+        }
+      },
+      "notes": "Admin — full access + messaging opt-in for smoke testing"
     }
   },
   "defaults": {
@@ -118,6 +122,14 @@
       "description": "Quoting lessons and product notes",
       "actions": [
         "create"
+      ]
+    },
+    {
+      "id": "messaging",
+      "label": "Messaging",
+      "description": "Send quotes (and later other entities) by email via the Prospect merge-and-send action. Off by default — opt in explicitly once the tool has been validated against a real quote.",
+      "actions": [
+        "send"
       ]
     }
   ]
