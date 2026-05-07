@@ -362,8 +362,10 @@ callers cannot directly email customers. Workflow is always:
 9. **£336 means two different things** — both the standard per-visit minimum
    for live contracts AND the non-service visit charge in the contract terms.
    Don't conflate.
-10. **Don't assume standard rates apply.** Always confirm pricing with the
-    user, especially for umbrella deals.
+10. **Confirm pricing only when an override is signalled.** If the user
+    mentions an umbrella contract, a discount, or any non-standard pricing
+    context, confirm the per-unit rate before applying. Otherwise default
+    to the WCG standard rate card without asking.
 11. **Three LibreOffice rendering quirks must be patched in normalise_anchors**:
     column-anchored images overshoot right margin; behindDoc=0 logos break
     the top page-frame border; v:shape with mso-height-percent stretches
