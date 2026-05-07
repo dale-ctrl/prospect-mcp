@@ -18,11 +18,30 @@ export interface ODataError {
         }>;
     };
 }
+export interface ProspectCredentials {
+    PROSPECT_PAT: string;
+    PROSPECT_BASE_URL: string;
+    PROSPECT_PROFILE_ID: string;
+    PROSPECT_USER_ID: string;
+    PROSPECT_LOCALE: string;
+}
+/**
+ * Resolve credentials from env vars first, then ~/.prospect-crm/config.json
+ * as a fallback for plugin users who ran scripts/setup.cjs instead of
+ * editing claude_desktop_config.json. Throws an actionable error if no
+ * PAT can be found anywhere.
+ *
+ * Precedence: process env > config file > built-in defaults (where they apply).
+ * Env wins for every individual key — a user can override one value via env
+ * while leaving the rest in the config file.
+ */
+export declare function loadCredentials(): ProspectCredentials;
 export declare class ProspectClient {
     private baseUrl;
     private token;
     private profileId;
     private locale;
+    private userId;
     private apiUserEmail;
     private apiUserEmailError;
     private apiUserEmailPromise;

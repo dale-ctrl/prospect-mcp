@@ -14,80 +14,65 @@ Gives Claude the ability to:
 
 ## Install
 
-### Recommended — plugin install (1.1.0+)
+### Recommended (Claude plugin install — 1.2.0+)
 
-This repo is a Claude Code plugin. From inside Claude Code or Claude Desktop:
+1. In Claude Desktop, open **Customize → Personal plugins → +**.
+2. Add marketplace: paste `dale-ctrl/prospect-mcp`.
+3. Click **Install** on `prospect-crm`.
+4. Run the one-time credential setup.
 
-1. Add the marketplace and install the plugin:
-
-   ```
-   /plugin marketplace add dale-ctrl/prospect-mcp
-   ```
-
-2. Install the plugin from that marketplace:
-
-   ```
-   /plugin install prospect-crm@wcg-prospect
-   ```
-
-   The MCP server runs from the plugin's bundled `dist/`, and the [`versa-maintenance-contracts-bulk`](skills/versa-maintenance-contracts-bulk/SKILL.md) skill auto-loads with the plugin — no copying into `~/.claude/skills/`.
-
-3. **Enable auto-updates** so future versions land on app restart without manual update commands. Download and run the helper script:
-
-   **Windows (PowerShell):**
+   **Windows (recommended):** from PowerShell, run the script straight off the NAS share:
 
    ```powershell
-   Invoke-WebRequest https://raw.githubusercontent.com/dale-ctrl/prospect-mcp/main/scripts/enable-autoupdate.cjs -OutFile enable-autoupdate.cjs
-   node enable-autoupdate.cjs
+   \\192.168.1.155\sfm_data\prospect-mcp\scripts\setup-user.ps1
    ```
 
-   **Mac/Linux:**
+   It pre-flights Node + Claude Desktop, prompts for your CRM user code (e.g. `DL`, `ML`) and your `PROSPECT_PAT` (hidden input), and writes `%USERPROFILE%\.prospect-crm\config.json` with current-user-only ACLs. It also detects and warns about any leftover `prospect-crm` entry in `claude_desktop_config.json` (left over from v1.2.0); see [Migrating](#migrating-from-a-connector-based-install-v10x--v11x) below if you need to remove one.
+
+   **Mac / Linux / cross-platform fallback:** Node-based equivalent — works anywhere Node 18+ is on PATH:
 
    ```bash
-   curl -O https://raw.githubusercontent.com/dale-ctrl/prospect-mcp/main/scripts/enable-autoupdate.cjs
-   node enable-autoupdate.cjs
+   curl -O https://raw.githubusercontent.com/dale-ctrl/prospect-mcp/main/scripts/setup.cjs
+   node setup.cjs
    ```
 
-   Restart Claude Desktop after running. From then on, every restart pulls the latest plugin version automatically — no `/plugin update` commands needed.
+   Both scripts write the same `~/.prospect-crm/config.json` and prompt for the same fields (`PROSPECT_PAT`, `PROSPECT_BASE_URL`, `PROSPECT_USER_ID`). Run once per machine; future plugin updates pick the credentials up automatically. Re-run any time your PAT changes — the previous file is backed up with a timestamp suffix.
 
-   The script just sets `autoUpdate: true` on the `wcg-prospect` entry in `~/.claude/plugins/known_marketplaces.json`. Anthropic has an [open feature request](https://github.com/anthropics/claude-code/issues/10265) for a built-in CLI/UI alternative, so this script may become unnecessary in a future Claude Desktop release.
-
-You still need to set the `PROSPECT_PAT` (and optionally `PROSPECT_PROFILE_ID`) environment variable in your Claude Code/Desktop env. See [Required environment](#required-environment) below.
-
-### Migrating from a 1.0.x `mcpServers` install
-
-If you previously added a `prospect-crm` block to your `claude_desktop_config.json` under `mcpServers`, **remove it before installing the plugin**. Claude Desktop treats two MCP servers with the same name as a duplicate and the plugin's server won't load. After removing the old block, restart Claude Desktop, then run the install steps above.
-
-### Legacy / fallback — raw `mcpServers` entry
-
-For Claude Desktop versions that don't yet support `/plugin` commands, the original install path still works. You miss skill auto-loading (you have to copy [`skills/versa-maintenance-contracts-bulk/`](skills/versa-maintenance-contracts-bulk/) into `%USERPROFILE%\.claude\skills\` or `~/.claude/skills/` yourself), but the MCP tools function identically.
-
-1. Clone or sync this repo locally (e.g. on the NAS share).
-2. `npm install && npm run build`.
-3. Generate a Prospect PAT in ProspectCRM: **Settings > Integrations > API > Personal Access Tokens**. Keep it safe — treat it like a password.
-4. Edit your `claude_desktop_config.json`:
-   - **Windows:** `%APPDATA%\Claude\claude_desktop_config.json`
-   - **Mac:** `~/Library/Application Support/Claude/claude_desktop_config.json`
-
-   Add to `mcpServers`:
-
-   ```json
-   {
-     "mcpServers": {
-       "prospect-crm": {
-         "command": "node",
-         "args": ["\\\\SYNOLOGY-NAS\\IT\\prospect-mcp\\dist\\index.js"],
-         "env": {
-           "PROSPECT_PAT": "your_personal_access_token",
-           "PROSPECT_BASE_URL": "https://api-v1-westeurope.prospect365.com"
-         }
-       }
-     }
-   }
-   ```
-
-   Replace the UNC path with the actual location of this repo on your NAS. If Node isn't on PATH, use the full path to `node.exe` (`where node`).
 5. Restart Claude Desktop.
+
+The MCP server runs from the plugin's bundled `dist/`, and the [`versa-maintenance-contracts-bulk`](skills/versa-maintenance-contracts-bulk/SKILL.md) skill auto-loads with the plugin — no copying into `~/.claude/skills/`.
+
+### Optional — enable auto-updates
+
+So future plugin versions land on app restart without manual `/plugin update` commands. Download and run the helper script:
+
+**Windows (PowerShell):**
+
+```powershell
+Invoke-WebRequest https://raw.githubusercontent.com/dale-ctrl/prospect-mcp/main/scripts/enable-autoupdate.cjs -OutFile enable-autoupdate.cjs
+node enable-autoupdate.cjs
+```
+
+**Mac/Linux:**
+
+```bash
+curl -O https://raw.githubusercontent.com/dale-ctrl/prospect-mcp/main/scripts/enable-autoupdate.cjs
+node enable-autoupdate.cjs
+```
+
+Restart Claude Desktop after running. The script sets `autoUpdate: true` on the `wcg-prospect` entry in `~/.claude/plugins/known_marketplaces.json`. Anthropic has an [open feature request](https://github.com/anthropics/claude-code/issues/10265) for a built-in CLI/UI alternative.
+
+### Migrating from a connector-based install (v1.0.x / v1.1.x)
+
+If you previously installed via an `mcpServers` entry in `claude_desktop_config.json`:
+
+1. Open `%APPDATA%\Claude\claude_desktop_config.json` (Windows) or `~/Library/Application Support/Claude/claude_desktop_config.json` (Mac).
+2. Remove the `prospect-crm` entry from the `mcpServers` object — Claude Desktop treats two MCP servers with the same name as a duplicate and the plugin's server won't load if both exist.
+3. Save the file.
+4. Run the credential setup (above) to migrate your credentials into `~/.prospect-crm/config.json` — `setup-user.ps1` on Windows, `node setup.cjs` everywhere else.
+5. Restart Claude Desktop.
+
+The legacy `mcpServers` install path still works for one more release as a fallback, but new installs should use the plugin path. The `PROSPECT_PAT` env var continues to take precedence over the config file when both are set, so power users / CI can still drive the connector via environment variables.
 
 ### First-time API smoke test (any install path)
 
@@ -129,14 +114,22 @@ Two tools replicate the 7-call flow Prospect's own UI runs when you hit "Send Em
 
 ### Required environment
 
-Add to `.env`:
+The MCP client at startup resolves credentials in this order:
+
+1. **Process env vars** — `PROSPECT_PAT`, `PROSPECT_BASE_URL`, `PROSPECT_USER_ID`, `PROSPECT_PROFILE_ID`, `PROSPECT_LOCALE`. CI / power users can keep using these.
+2. **Config file** at `~/.prospect-crm/config.json` (created by `scripts/setup-user.ps1` on Windows or `scripts/setup.cjs` cross-platform). Plugin users typically only have this.
+3. **Built-in defaults** for `PROSPECT_BASE_URL` (= `https://api-v1-westeurope.prospect365.com`) and `PROSPECT_LOCALE` (= `en-GB`).
+
+If neither env nor file supplies a `PROSPECT_PAT`, the MCP server fails fast at startup with an actionable error pointing at the setup script. `PROSPECT_PROFILE_ID` is auto-resolved via `GET /Info()` on first request when not set explicitly.
+
+For local development against a checked-out repo:
 
 ```
+# .env
 PROSPECT_PAT=<your_personal_access_token>
 PROSPECT_BASE_URL=https://api-v1-westeurope.prospect365.com
+PROSPECT_USER_ID=<your-3-char-user-code-e.g.-DL>
 ```
-
-`PROSPECT_PROFILE_ID` is resolved automatically on first request via `GET /Info()`. You only need to set it manually if that auto-fetch is blocked (e.g. running offline against a fixture). `PROSPECT_LOCALE` defaults to `en-GB`.
 
 **Do not use the public-docs host** `crm-odata-v1.prospect365.com` — it's a read-only shim on which `SendMessage` silently returns `value: 0`.
 

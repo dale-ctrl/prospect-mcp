@@ -2,11 +2,73 @@
  * OData HTTP client for Prospect365 CRM API.
  * Handles authentication, rate limiting, and error formatting.
  */
+import * as fs from "fs";
+import * as os from "os";
+import * as path from "path";
+const DEFAULT_BASE_URL = "https://api-v1-westeurope.prospect365.com";
+const DEFAULT_LOCALE = "en-GB";
+/**
+ * Resolve credentials from env vars first, then ~/.prospect-crm/config.json
+ * as a fallback for plugin users who ran scripts/setup.cjs instead of
+ * editing claude_desktop_config.json. Throws an actionable error if no
+ * PAT can be found anywhere.
+ *
+ * Precedence: process env > config file > built-in defaults (where they apply).
+ * Env wins for every individual key — a user can override one value via env
+ * while leaving the rest in the config file.
+ */
+export function loadCredentials() {
+    const env = {
+        PROSPECT_PAT: process.env.PROSPECT_PAT,
+        PROSPECT_BASE_URL: process.env.PROSPECT_BASE_URL,
+        PROSPECT_PROFILE_ID: process.env.PROSPECT_PROFILE_ID,
+        PROSPECT_USER_ID: process.env.PROSPECT_USER_ID,
+        PROSPECT_LOCALE: process.env.PROSPECT_LOCALE,
+    };
+    // Only touch the file system if the env doesn't have what we need.
+    let file = {};
+    if (!env.PROSPECT_PAT) {
+        const configPath = path.join(os.homedir(), ".prospect-crm", "config.json");
+        if (fs.existsSync(configPath)) {
+            let raw;
+            try {
+                raw = fs.readFileSync(configPath, "utf-8");
+            }
+            catch (err) {
+                throw new Error(`Could not read Prospect plugin config at ${configPath}: ${err.message}. ` +
+                    "Re-run the setup script: " +
+                    "curl -O https://raw.githubusercontent.com/dale-ctrl/prospect-mcp/main/scripts/setup.cjs && node setup.cjs");
+            }
+            try {
+                file = JSON.parse(raw);
+            }
+            catch (err) {
+                throw new Error(`Prospect plugin config at ${configPath} is not valid JSON: ${err.message}. ` +
+                    "Re-run the setup script to overwrite it: " +
+                    "curl -O https://raw.githubusercontent.com/dale-ctrl/prospect-mcp/main/scripts/setup.cjs && node setup.cjs");
+            }
+        }
+    }
+    const result = {
+        PROSPECT_PAT: env.PROSPECT_PAT || file.PROSPECT_PAT || "",
+        PROSPECT_BASE_URL: env.PROSPECT_BASE_URL || file.PROSPECT_BASE_URL || DEFAULT_BASE_URL,
+        PROSPECT_PROFILE_ID: env.PROSPECT_PROFILE_ID || file.PROSPECT_PROFILE_ID || "",
+        PROSPECT_USER_ID: env.PROSPECT_USER_ID || file.PROSPECT_USER_ID || "",
+        PROSPECT_LOCALE: env.PROSPECT_LOCALE || file.PROSPECT_LOCALE || DEFAULT_LOCALE,
+    };
+    if (!result.PROSPECT_PAT) {
+        throw new Error("PROSPECT_PAT not configured. Either set the PROSPECT_PAT env var, or run the plugin setup:\n" +
+            "  Mac/Linux:  curl -O https://raw.githubusercontent.com/dale-ctrl/prospect-mcp/main/scripts/setup.cjs && node setup.cjs\n" +
+            "  Windows:    Invoke-WebRequest https://raw.githubusercontent.com/dale-ctrl/prospect-mcp/main/scripts/setup.cjs -OutFile setup.cjs ; node setup.cjs");
+    }
+    return result;
+}
 export class ProspectClient {
     baseUrl;
     token;
     profileId;
     locale;
+    userId;
     apiUserEmail = null;
     apiUserEmailError = null;
     apiUserEmailPromise = null;
@@ -17,14 +79,12 @@ export class ProspectClient {
         // crm-odata-v1.prospect365.com is a read-only / no-op shim — bound
         // actions like SendMessage silently return value:0 there. Confirmed
         // via UI HAR capture 2026-04-23.
-        this.baseUrl = process.env.PROSPECT_BASE_URL || "https://api-v1-westeurope.prospect365.com";
-        this.token = process.env.PROSPECT_PAT || "";
-        this.profileId = process.env.PROSPECT_PROFILE_ID || "";
-        this.locale = process.env.PROSPECT_LOCALE || "en-GB";
-        if (!this.token) {
-            throw new Error("PROSPECT_PAT environment variable is required. " +
-                "Generate a Personal Access Token in Prospect CRM: Settings > Integrations > API.");
-        }
+        const creds = loadCredentials();
+        this.baseUrl = creds.PROSPECT_BASE_URL;
+        this.token = creds.PROSPECT_PAT;
+        this.profileId = creds.PROSPECT_PROFILE_ID;
+        this.locale = creds.PROSPECT_LOCALE;
+        this.userId = creds.PROSPECT_USER_ID;
     }
     /**
      * Ensure this.profileId is populated. If not set via env var, resolve it by
@@ -222,11 +282,12 @@ export class ProspectClient {
         if (this.apiUserEmailPromise)
             return this.apiUserEmailPromise;
         this.apiUserEmailPromise = (async () => {
-            const userId = (process.env.PROSPECT_USER_ID || "").trim();
+            const userId = (this.userId || "").trim();
             if (!userId) {
-                throw new Error("PROSPECT_USER_ID env var is not set — cannot resolve the API user's email " +
-                    "for the send_quote_email safety gate. Set PROSPECT_USER_ID to the CRM UserCode " +
-                    "the PAT belongs to (e.g. 'DL').");
+                throw new Error("PROSPECT_USER_ID is not configured — cannot resolve the API user's email " +
+                    "for the send_quote_email safety gate. Set the PROSPECT_USER_ID env var or " +
+                    "re-run scripts/setup.cjs to add it to ~/.prospect-crm/config.json. " +
+                    "Use the CRM UserCode the PAT belongs to (e.g. 'DL').");
             }
             const res = await this.get("Users", `$filter=UserCode eq '${userId.replace(/'/g, "''")}'&$select=UserCode,EmailAddress&$top=1`);
             const row = res.value[0];

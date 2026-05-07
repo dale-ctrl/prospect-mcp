@@ -1,43 +1,43 @@
 <#
 .SYNOPSIS
-One-click setup of the Prospect CRM MCP connector on a user's machine.
+One-time credential setup for the Prospect CRM Claude plugin (Windows).
 
 .DESCRIPTION
-Run this yourself (as admin) on each new user's PC after Node.js and
-Claude Desktop are installed. From PowerShell:
+PowerShell-native equivalent of scripts/setup.cjs. Run once per user
+machine after installing the prospect-crm plugin via the Claude Desktop
+marketplace. From PowerShell:
 
     \\192.168.1.155\sfm_data\prospect-mcp\scripts\setup-user.ps1
 
-or from a mapped drive:
-
-    Z:\prospect-mcp\scripts\setup-user.ps1
+(or any other path you have the script at -- it does not need to live
+on the NAS, and nothing it writes references the NAS).
 
 Does the following, in order:
 
-  1. Verifies Node.js 18+ is on PATH (required — the MCP server is a
-     Node process launched by Claude Desktop).
+  1. Verifies Node.js 18+ is on PATH.
   2. Verifies Claude Desktop is installed.
-  3. Prompts for the CRM user code (e.g. ML, RL, JM).
+  3. Prompts for the CRM user code (e.g. DL, ML, RL).
   4. Prompts for the user's Prospect365 PAT (hidden input).
-  5. Backs up any existing %APPDATA%\Claude\claude_desktop_config.json.
-  6. Merges a `prospect-crm` MCP server entry into the config without
-     disturbing any other MCP entries the user may have.
-  7. Prints a reminder that you still need to add them + set their
-     permissions in the Admin Portal on your own machine.
+  5. Writes %USERPROFILE%\.prospect-crm\config.json with current-user-only
+     ACLs. Backs up any existing file with a timestamp suffix.
+  6. Detects any leftover v1.2.0 prospect-crm entry in
+     claude_desktop_config.json and prints removal instructions -- the
+     plugin install carries the MCP itself in v1.2.1+, so a duplicate
+     entry will block plugin load.
 
-Idempotent — re-running it updates the PAT without duplicating entries.
-If the user later gets a new PAT, run it again.
+Idempotent -- re-run any time the PAT changes; the previous config is
+backed up, never overwritten silently.
 
 .NOTES
-Does NOT touch permissions.json. That stays with the admin so access
-grants remain a deliberate decision you make in the portal, not a
-self-serve step.
+Does NOT touch claude_desktop_config.json. Does NOT touch the
+admin-portal permissions.json. Permissions remain a deliberate decision
+the admin makes in the portal.
 #>
 
 param(
   [string]$UserCode,
   [string]$Pat,
-  [string]$ServerPath
+  [string]$BaseUrl
 )
 
 $ErrorActionPreference = "Stop"
@@ -60,12 +60,19 @@ function Write-Fail {
   $script:FailCount++
 }
 
+function Write-Warn {
+  param([string]$Text)
+  Write-Host "  [warn] $Text" -ForegroundColor Yellow
+}
+
 function Write-Info {
   param([string]$Text)
   Write-Host "  $Text"
 }
 
-# ── Step 1: Node.js ────────────────────────────────────────────
+$DefaultBaseUrl = "https://api-v1-westeurope.prospect365.com"
+
+# -- Step 1: Node.js -------------------------------------------
 Write-Step "Checking Node.js"
 try {
   $nodeVersion = (& node --version 2>&1).Trim()
@@ -85,7 +92,7 @@ try {
   Write-Info "Install from https://nodejs.org/ then re-run this script."
 }
 
-# ── Step 2: Claude Desktop ─────────────────────────────────────
+# -- Step 2: Claude Desktop ------------------------------------
 Write-Step "Checking Claude Desktop"
 $claudePaths = @(
   "$env:LOCALAPPDATA\Programs\claude\Claude.exe",
@@ -108,22 +115,7 @@ if ($script:FailCount -gt 0) {
   exit 1
 }
 
-# ── Step 3: Locate the MCP server on the NAS ──────────────────
-Write-Step "Locating the MCP server build"
-if (-not $ServerPath) {
-  # The script itself lives in <repo>\scripts\, so the dist is one level up.
-  $repoRoot = Split-Path -Parent $PSScriptRoot
-  $ServerPath = Join-Path $repoRoot "dist\index.js"
-}
-
-if (-not (Test-Path $ServerPath)) {
-  Write-Fail "MCP server entry point not found at: $ServerPath"
-  Write-Info "Ask Dale to run 'npm run build' on the NAS share."
-  exit 1
-}
-Write-Ok "MCP server at $ServerPath"
-
-# ── Step 4: Collect user inputs ────────────────────────────────
+# -- Step 3: Collect user inputs -------------------------------
 Write-Step "User details"
 if (-not $UserCode) {
   $UserCode = Read-Host "Your CRM user code (e.g. DL, ML, RL)"
@@ -135,6 +127,7 @@ if ($UserCode -eq "") {
 }
 Write-Ok "User code: $UserCode"
 
+# -- Step 4: PAT -----------------------------------------------
 if (-not $Pat) {
   Write-Info "To generate your PAT:"
   Write-Info "  1. Log in to Prospect365 in a browser."
@@ -147,92 +140,103 @@ if (-not $Pat) {
 }
 $Pat = $Pat.Trim()
 if ($Pat.Length -lt 20) {
-  Write-Fail "PAT looks too short — should be a long hex-ish string. Got $($Pat.Length) chars."
+  Write-Fail "PAT looks too short -- should be a long hex-ish string. Got $($Pat.Length) chars."
   exit 1
 }
 Write-Ok "PAT captured ($($Pat.Length) characters)"
 
-# ── Step 5: Back up + merge claude_desktop_config.json ────────
-Write-Step "Updating Claude Desktop config"
-$configDir = "$env:APPDATA\Claude"
-$configFile = "$configDir\claude_desktop_config.json"
+# -- Step 5: Optional base URL override ------------------------
+if (-not $BaseUrl) {
+  $BaseUrl = $DefaultBaseUrl
+}
+Write-Ok "Base URL: $BaseUrl"
 
-if (-not (Test-Path $configDir)) {
-  New-Item -ItemType Directory -Force -Path $configDir | Out-Null
-  Write-Info "Created $configDir"
+# -- Step 6: Write user-local credential file ------------------
+Write-Step "Writing credential config"
+$credDir  = Join-Path $env:USERPROFILE ".prospect-crm"
+$credFile = Join-Path $credDir "config.json"
+
+if (-not (Test-Path $credDir)) {
+  New-Item -ItemType Directory -Force -Path $credDir | Out-Null
+  Write-Info "Created $credDir"
 }
 
-$config = $null
-if (Test-Path $configFile) {
-  $backup = "$configFile.backup-$(Get-Date -Format yyyyMMdd-HHmmss)"
-  Copy-Item $configFile $backup
-  Write-Ok "Backup saved: $backup"
+if (Test-Path $credFile) {
+  $stamp  = Get-Date -Format "yyyyMMdd-HHmmss"
+  $backup = "$credFile.backup-$stamp"
+  Copy-Item $credFile $backup
+  Write-Ok "Existing credentials backed up to $backup"
+}
 
+$cred = [ordered]@{
+  PROSPECT_PAT      = $Pat
+  PROSPECT_BASE_URL = $BaseUrl
+  PROSPECT_USER_ID  = $UserCode
+}
+
+$json = $cred | ConvertTo-Json -Depth 5
+[System.IO.File]::WriteAllText($credFile, $json, [System.Text.UTF8Encoding]::new($false))
+Write-Ok "Wrote $credFile"
+
+# Lock to current user only -- belt-and-braces, the parent dir already
+# defaults to the user's profile ACL, but be explicit about the file.
+try {
+  & icacls $credFile /inheritance:r /grant:r "$($env:USERNAME):(R,W)" | Out-Null
+  Write-Ok "Permissions restricted to $env:USERNAME"
+} catch {
+  Write-Warn "Could not tighten ACLs on $credFile -- file is still readable only inside your user profile."
+}
+
+# -- Step 7: Detect leftover v1.2.0 connector entry ------------
+Write-Step "Checking for stale connector entry"
+$desktopConfig = Join-Path $env:APPDATA "Claude\claude_desktop_config.json"
+if (Test-Path $desktopConfig) {
   try {
-    $raw = Get-Content $configFile -Raw -Encoding UTF8
-    if ($raw.Trim() -eq "") {
-      $config = [ordered]@{ mcpServers = [ordered]@{} }
+    $raw = Get-Content $desktopConfig -Raw -Encoding UTF8
+    if ($raw.Trim() -ne "") {
+      $parsed = $raw | ConvertFrom-Json
+      if ($parsed.PSObject.Properties.Name -contains "mcpServers" -and
+          $parsed.mcpServers -and
+          ($parsed.mcpServers.PSObject.Properties.Name -contains "prospect-crm")) {
+        Write-Warn "Found a 'prospect-crm' entry in $desktopConfig"
+        Write-Info "v1.2.1+ ships the MCP inside the plugin install, so this entry is no"
+        Write-Info "longer needed and will block the plugin's MCP from loading (duplicate"
+        Write-Info "server name). Open the file in a text editor, delete the 'prospect-crm'"
+        Write-Info "entry from the 'mcpServers' object, save, and restart Claude Desktop."
+      } else {
+        Write-Ok "No stale 'prospect-crm' entry in $desktopConfig"
+      }
     } else {
-      $config = $raw | ConvertFrom-Json
+      Write-Ok "claude_desktop_config.json is empty -- nothing to clean up"
     }
   } catch {
-    Write-Fail "Could not parse existing config as JSON: $($_.Exception.Message)"
-    Write-Info "Your original file is backed up. Fix or delete $configFile and re-run."
-    exit 1
+    Write-Warn "Could not parse $desktopConfig as JSON -- check it manually for a stale 'prospect-crm' entry."
   }
 } else {
-  $config = [ordered]@{ mcpServers = [ordered]@{} }
+  Write-Ok "No claude_desktop_config.json present -- nothing to clean up"
 }
 
-# Normalise — older configs may lack mcpServers
-if (-not ($config.PSObject.Properties.Name -contains "mcpServers")) {
-  $config | Add-Member -NotePropertyName mcpServers -NotePropertyValue ([ordered]@{}) -Force
-}
-
-# Build the prospect-crm entry
-$prospectEntry = [ordered]@{
-  command = "node"
-  args    = @($ServerPath)
-  env     = [ordered]@{
-    PROSPECT_PAT     = $Pat
-    PROSPECT_USER_ID = $UserCode
-  }
-}
-
-# Merge: replace if exists, insert if not
-if ($config.mcpServers.PSObject.Properties.Name -contains "prospect-crm") {
-  $config.mcpServers."prospect-crm" = $prospectEntry
-  Write-Ok "Updated existing 'prospect-crm' entry"
-} else {
-  $config.mcpServers | Add-Member -NotePropertyName "prospect-crm" -NotePropertyValue $prospectEntry -Force
-  Write-Ok "Added 'prospect-crm' entry"
-}
-
-# Write back with UTF-8 (no BOM) so Claude parses it cleanly
-$json = $config | ConvertTo-Json -Depth 10
-[System.IO.File]::WriteAllText($configFile, $json, [System.Text.UTF8Encoding]::new($false))
-Write-Ok "Wrote $configFile"
-
-# ── Step 6: Done ──────────────────────────────────────────────
+# -- Step 8: Done ----------------------------------------------
 Write-Host ""
 Write-Host "=================================================================" -ForegroundColor Green
 Write-Host "  Setup complete for user $UserCode on this machine" -ForegroundColor Green
 Write-Host "=================================================================" -ForegroundColor Green
 Write-Host ""
-Write-Host "Next steps (admin to-do):"
-Write-Host "  1. On your own machine, open the Admin Portal:"
+Write-Host "Next steps (admin to-do, on your own machine):"
+Write-Host "  1. Open the Admin Portal:"
 Write-Host "       http://localhost:3333" -ForegroundColor Yellow
-Write-Host "  2. Click + Add User, set code to $UserCode, fill in name and notes,"
-Write-Host "     then tick the permission toggles that match their role."
-Write-Host "  3. Hit Save. Changes are live within 5 seconds — no Claude"
-Write-Host "     Desktop restart needed here."
+Write-Host "  2. Click + Add User, set code to $UserCode, fill in name/notes,"
+Write-Host "     tick the permission toggles that match their role, hit Save."
+Write-Host "     Changes go live within 5 seconds; no Claude restart needed."
 Write-Host ""
 Write-Host "Next steps (this machine):"
-Write-Host "  1. Fully quit Claude Desktop on this PC (right-click tray icon,"
-Write-Host "     Quit). Closing the window is not enough."
-Write-Host "  2. Reopen Claude Desktop from the Start menu."
-Write-Host "  3. In a new chat, ask: 'search quotes for Exeter University' to"
+Write-Host "  1. If the warning above flagged a stale 'prospect-crm' entry in"
+Write-Host "     claude_desktop_config.json, remove it before restarting."
+Write-Host "  2. Fully quit Claude Desktop (right-click tray icon, Quit)."
+Write-Host "     Closing the window is not enough."
+Write-Host "  3. Reopen Claude Desktop from the Start menu."
+Write-Host "  4. In a new chat, ask: 'search quotes for Exeter University' to"
 Write-Host "     confirm the connector loaded."
 Write-Host ""
-Write-Host "Config written to: $configFile"
+Write-Host "Credentials written to: $credFile"
 Write-Host ""
