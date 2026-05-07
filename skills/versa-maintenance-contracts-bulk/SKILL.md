@@ -33,21 +33,26 @@ sending.
   (top-right three-dot menu on a Division view) triggers this template via the
   server-side merge path that we cannot replicate from the API.
 
-## CRITICAL: the contact-requirement gotcha — bypass MergeData
+## CRITICAL: do not invoke server-side merge
 
-Prospect's Division-bound `MergeData` action errors with
-`HTTP 500 {"message":"ContactNotSet","source":"Budgeting"}` whenever called
-from the API, regardless of:
+**DO NOT call `merge_division_document` or any tool that hits Prospect's
+`MergeData` action. The merge MUST be done client-side via `python-docx` +
+raw XML editing — see Step 3 of the workflow.** This is non-negotiable for
+this skill: every API path into `MergeData` returns
+`HTTP 500 {"message":"ContactNotSet","source":"Budgeting"}` and there is no
+parameter you can add to fix it.
 
-- whether `Division.HiddenContactId` is set (Wimbledon's merges work despite null)
-- whether the Division has any contacts (still fails with one created)
-- whether `contactId` is passed to `merge_division_document` (the underlying
-  action signature has no contact parameter — confirmed in `$metadata`)
+If you find yourself reaching for `merge_division_document`, stop and go to
+Step 3. Do not retry with different `contactId` values, do not pre-create a
+contact, do not set `HiddenContactId` first — none of these change the
+outcome. The action signature has no contact parameter (confirmed in
+`$metadata`), Wimbledon's working merges have `HiddenContactId` null, and
+the same 500 fires on Divisions that already have contacts. The requirement
+cannot be satisfied from the OData surface; client-side merging is the
+only path.
 
-**Do not waste rounds trying to satisfy this requirement via the API.** The
-reliable path is to produce the docx client-side from a template and skip the
-merge action entirely. CRM-side data still gets populated via the working
-`update_division_versa_maintenance` writer.
+CRM-side data still gets written via `update_division_versa_maintenance`
+(Step 2). That's the OData writer, not `MergeData`, and is fine to call.
 
 ## Field mapping (verified)
 
@@ -116,6 +121,27 @@ whether the £336 minimum applies per site.
   when creating the second.
 
 ## Workflow
+
+### Tools you MUST NOT call
+
+- **`merge_division_document`** — hits `MergeData`, returns 500
+  ContactNotSet on every call. Use the client-side merger in Step 3.
+- **Any tool path that triggers Prospect's server-side merge for template
+  `23caad`.** The Prospect UI button "Create Versa Maintenance Contract"
+  also routes through `MergeData` — do not try to script that path either.
+- **`send_quote_email` / any tool that emails the customer directly.**
+  The MCP overrides `emailTo` to the API user by design. Always hand the
+  PDF to the user; let them forward from their own mail client. See
+  "emailTo safety gate" below.
+
+### Tools you DO call
+
+- `search_divisions`, `list_divisions`, `get_division_details` — find sites.
+- `create_division`, `create_contact` — only when a site is missing from CRM.
+- `update_division_versa_maintenance` — populates the Versa fields on the
+  Division (the OData writer, not `MergeData`; this is fine).
+- `search_documents` + `get_merge_output` — fetch the Wimbledon-style docx
+  template that Step 3 merges client-side.
 
 ### 1. Match every site to a CRM DivisionId
 
