@@ -280,47 +280,129 @@ get_merge_output({ documentId: <hit>, saveTo: "/tmp/versa_template.docx" })
 This gives you a docx with all WCG branding/styles already applied — only
 the per-school data needs swapping.
 
-**Detect the source values from the template:**
+**Detect source values dynamically — do NOT hardcode them.**
 
-- Table 0 cell [0,1] — Client name
-- Table 0 cell [1,1] — Site address (newline-separated lines)
-- Table 0 cell [2,1] — Tel No
-- Table 0 cell [4,1] — Equipment to be maintained
-- Inside a `<w:txbxContent>` Word textbox — Total cost (e.g. `"378.00"`)
+The template that comes back from `search_documents` + `get_merge_output`
+is whatever Versa Maintenance Contract document is most recent on the
+connector — Wimbledon today, somebody else tomorrow. Extract the source
+values from the template's own table cells + cost textbox at runtime,
+then use those as the find-and-replace sources. Hardcoding strings like
+"Wimbledon Park Primary School" / "Havana Road" / "378.00" silently
+breaks the moment the most-recent doc is a different customer's merge:
+the find-and-replace simply doesn't match, and the previous customer's
+details leak through into the output.
 
-**Important:** the cost lives in a Word textbox, not a paragraph. python-docx's
-`.paragraphs` iteration won't see it. Use raw XML on `word/document.xml` and
-`str.replace()` on the unzipped XML — the cost string only occurs once in the
-document.
+Where each value lives in the unzipped docx:
 
-**Watch for transient duplicates in REPLACEMENTS.** Some source strings
-appear twice in the XML *until* an earlier replacement runs. The classic
-example: Wimbledon source has "Wimbledon" in BOTH the school name
-("Wimbledon Park Primary School") AND the address line. If you sanity-check
-all REPLACEMENTS counts upfront, the count for "Wimbledon" is 2 and any
-`if count != 1` check fails the run.
+- Client name — `table[0]` cell `[0,1]`
+- Site address (multi-line) — `table[0]` cell `[1,1]`, split on
+  newlines into N address strings (4 or 5 lines depending on the
+  source school)
+- Tel No — `table[0]` cell `[2,1]`
+- Equipment to be maintained — `table[0]` cell `[4,1]`
+- Cost — the contents of the single `<w:txbxContent>` textbox in
+  `word/document.xml`, e.g. `"£378.00 ex VAT"` — extract the numeric
+  portion (`"378.00"`) for replacement
 
-The fix is to count *per-step*, after each prior replacement has run, not
-all upfront. Order the REPLACEMENTS list so longer/more-specific strings
-replace first ("Wimbledon Park Primary School" before "Wimbledon"):
+**Important:** the cost lives in a Word textbox, not a paragraph.
+python-docx's `.paragraphs` iteration won't see it. Use raw XML on
+`word/document.xml` and `str.replace()` on the unzipped XML — the
+cost string only occurs once in the document.
 
 ```python
-REPLACEMENTS = [
-    ('Wimbledon Park Primary School', new_client_name),    # MUST be first
-    ('9 x Versa Benchmark Tables',    new_equipment),
-    ('Havana Road',                   addr_line_1),
-    ('Wimbledon',                     addr_line_2),         # safe — school name already gone
-    ('London',                        addr_line_3),
-    ('Surrey',                        addr_line_4),
-    ('SW19 8EJ',                      addr_postcode),
-    ('020 8946 4925',                 tel_no),
-    ('378.00',                        f"{total_value:.2f}"),
-]
+import re
+import zipfile
+from docx import Document
 
-for old, new in REPLACEMENTS:
+COST_RE = re.compile(r'£?\s*(\d+(?:\.\d{2})?)\s*(?:ex\s*VAT)?', re.IGNORECASE)
+
+def detect_source_values(template_path):
+    """
+    Read source values out of whatever Versa Maintenance template comes
+    back from the connector. Returns a dict the caller hands to
+    build_replacements() alongside the target dict.
+    """
+    doc = Document(template_path)
+    t0 = doc.tables[0]
+    address_cell = t0.cell(1, 1).text
+    address_lines = [line.strip() for line in address_cell.split('\n') if line.strip()]
+
+    # Cost lives in the body XML's single textbox, not in a paragraph.
+    # Read the unzipped document.xml and pull the numeric portion.
+    with zipfile.ZipFile(template_path) as zf:
+        body_xml = zf.read('word/document.xml').decode('utf-8')
+    txbx = re.search(r'<w:txbxContent>(.*?)</w:txbxContent>', body_xml, re.DOTALL)
+    if not txbx:
+        raise SystemExit('template has no <w:txbxContent> textbox — cost source missing')
+    txbx_text = re.sub(r'<[^>]+>', '', txbx.group(1))
+    cost_match = COST_RE.search(txbx_text)
+    if not cost_match:
+        raise SystemExit(f'could not extract numeric cost from textbox: {txbx_text!r}')
+
+    return {
+        'client_name':   t0.cell(0, 1).text.strip(),
+        'address_lines': address_lines,           # list, length 4 or 5
+        'tel_no':        t0.cell(2, 1).text.strip(),
+        'equipment':     t0.cell(4, 1).text.strip(),
+        'cost':          cost_match.group(1),     # e.g. "378.00"
+    }
+
+def build_replacements(detected, target):
+    """
+    Build the ordered (src -> dst) list. Order matters: longer/more
+    specific strings first, so a substring collision (e.g. detected
+    client name appearing inside an address line) can't bite later
+    replacements.
+    """
+    pairs = [
+        (detected['client_name'], target['client_name']),    # MUST be first
+        (detected['equipment'],   target['equipment']),
+        (detected['tel_no'],      target['tel_no']),
+        (detected['cost'],        f"{target['total_value']:.2f}"),
+    ]
+    # Address lines: pair detected against target, padding the shorter side
+    # with '' so leftover source lines get blanked rather than left in.
+    src_addr = detected['address_lines']
+    dst_addr = list(target['address_lines'])
+    while len(dst_addr) < len(src_addr):
+        dst_addr.append('')
+    pairs.extend(zip(src_addr, dst_addr))
+    return pairs
+```
+
+**Watch for transient duplicates in REPLACEMENTS.** Some detected
+source strings appear twice in the XML *until* an earlier replacement
+runs. The classic example: the detected client name may also appear
+as a word in one of the address lines (a Wimbledon-style template has
+"Wimbledon" in BOTH the school name and the address). If you
+sanity-check all REPLACEMENTS counts upfront, the count for the
+overlap word is 2 and any `if count != 1` check fails the run.
+
+The fix is to count *per-step*, after each prior replacement has run,
+not all upfront. `build_replacements()` above orders the client name
+first, so by the time the address lines are processed the client-name
+copy is already gone:
+
+```python
+detected = detect_source_values('/tmp/versa_template.docx')
+target = {
+    'client_name':   new_client_name,
+    'equipment':     new_equipment,             # e.g. "9x Mobile Tables"
+    'tel_no':        new_tel_no,
+    'address_lines': new_address_lines,         # list of 4 or 5 strings
+    'total_value':   new_total_value,           # float, e.g. 378.00
+}
+replacements = build_replacements(detected, target)
+
+with zipfile.ZipFile(template_path) as zf:
+    xml = zf.read('word/document.xml').decode('utf-8')
+
+for old, new in replacements:
+    if not old:                  # skip empty detected lines (shorter source address)
+        continue
     cnt = xml.count(old)
     if cnt < 1:
-        raise SystemExit(f"missing {old!r} in template")
+        raise SystemExit(f"missing {old!r} in template — layout may have changed")
     xml = xml.replace(old, new, 1)   # replace one at a time
 ```
 
@@ -390,6 +472,12 @@ def normalise_anchors(xml):
 If the WCG branding template ever gets updated (different margins, new
 logos, additional anchored shapes), re-derive `LEFT_MARGIN_CM` and
 `RIGHT_MARGIN_CM` from the new template's `sectPr` element and re-run.
+The merger itself doesn't care which prior merge is used as the
+template — only the structural layout matters: `table[0]` rows
+0/1/2/4 in column index 1, plus a single `<w:txbxContent>` textbox
+for the cost. As long as that layout is preserved, any prior merge
+on the connector works as a template source; `detect_source_values()`
+will pull the right strings out of it.
 
 ### 4. Trim the empty paragraphs between signature and footer
 
@@ -655,3 +743,19 @@ callers cannot directly email customers. Workflow is always:
   contract went out short.
   (e) Step 5 verification now states the expected page count is 3, not 2,
   to head off over-trimming attempts aimed at a 2-page result.
+- 2026-05-07 (template-source robustness): Step 3 now detects source
+  values dynamically from the template's own `table[0]` cells and the
+  `<w:txbxContent>` cost textbox, rather than hardcoding Wimbledon Park
+  reference values (Wimbledon Park Primary School / Havana Road / 020
+  8946 4925 / 9 x Versa Benchmark Tables / 378.00) as the
+  find-and-replace sources. Earlier versions hardcoded those because
+  the most recent Versa Maintenance Contract.docx in CRM happened to
+  be Wimbledon-style. As soon as a different customer's merge becomes
+  the most recent doc on the connector, the hardcoded sources stop
+  matching and the script silently leaves the previous customer's
+  details in the output. Step 3 now uses a `detect_source_values(
+  template_path)` helper that returns a dict, plus a
+  `build_replacements(detected, target)` helper that emits the ordered
+  (src -> dst) map with the client name first so substring collisions
+  (detected client name appearing inside an address line) can't bite
+  later address-line replacements.
