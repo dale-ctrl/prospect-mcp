@@ -25,23 +25,35 @@ If any of these are missing, the setup script will detect them and tell you what
 
 ### Recommended (Claude plugin install — 1.2.11+)
 
-1. Run the comprehensive setup script. **Use the `.cmd` launcher** — it bypasses Windows' default execution policy that would otherwise reject the unsigned `.ps1` (`UnauthorizedAccess: PSSecurityException`). From PowerShell or `cmd.exe`:
+1. Run the comprehensive setup script.
 
-   **Windows (recommended):**
+   **Windows (recommended) — download-and-run from GitHub.** Open PowerShell and paste:
+
+   ```powershell
+   $url = "https://raw.githubusercontent.com/dale-ctrl/prospect-mcp/main/scripts/setup-user.ps1"
+   $tmp = Join-Path $env:TEMP "prospect-setup-user.ps1"
+   try {
+     Invoke-WebRequest -UseBasicParsing -Uri $url -OutFile $tmp
+     Unblock-File -Path $tmp
+     & powershell -NoProfile -ExecutionPolicy Bypass -File $tmp
+   } finally {
+     Remove-Item -Path $tmp -ErrorAction SilentlyContinue
+   }
+   ```
+
+   This downloads `setup-user.ps1` into `%TEMP%`, strips the Mark-of-the-Web zone identifier (without which PowerShell treats the file as untrusted-remote and refuses to run it under default execution policy), executes it with explicit `-ExecutionPolicy Bypass`, and removes the temp file when done. Avoids the corporate-policy / network-zone snags that block running a UNC-pathed unsigned script directly.
+
+   To refresh credentials only (skip the full install), change the `-File $tmp` line to `-File $tmp -CredentialsOnly`.
+
+   The script handles everything: registers the plugin marketplace via Claude Code CLI, installs the plugin's local files, runs `npm install` for runtime dependencies, wires up the `prospect-crm` connector entry in `claude_desktop_config.json` (preserving any other `mcpServers` entries you have for Slack, Gmail, etc.), and captures your CRM user code + PAT to `%USERPROFILE%\.prospect-crm\config.json`. Idempotent — re-run any time your PAT changes or to apply plugin updates.
+
+   **NAS fallback (only if you can't reach GitHub from the install machine):**
 
    ```
    \\192.168.1.155\sfm_data\prospect-mcp\scripts\setup-user.cmd
    ```
 
-   This handles everything in one go: registers the plugin marketplace via Claude Code CLI, installs the plugin's local files, runs `npm install` for runtime dependencies, wires up the `prospect-crm` connector entry in `claude_desktop_config.json` (preserving any other `mcpServers` entries you have for Slack, Gmail, etc.), and captures your CRM user code + PAT to `%USERPROFILE%\.prospect-crm\config.json`. Idempotent — re-run any time your PAT changes or to apply plugin updates.
-
-   To refresh credentials only (skip the full install):
-
-   ```
-   \\192.168.1.155\sfm_data\prospect-mcp\scripts\setup-user.cmd -CredentialsOnly
-   ```
-
-   **Fallback if the `.cmd` won't run:** invoke the `.ps1` directly with an explicit execution-policy bypass. Same script, same arguments, the `.cmd` is just a wrapper:
+   If the `.cmd` launcher is blocked by your machine's policy, the deepest fallback is invoking the `.ps1` directly with an explicit bypass:
 
    ```powershell
    powershell -NoProfile -ExecutionPolicy Bypass -File \\192.168.1.155\sfm_data\prospect-mcp\scripts\setup-user.ps1
@@ -68,15 +80,27 @@ If any of these are missing, the setup script will detect them and tell you what
 
 ### Updates
 
-When a new version of the plugin is pushed to GitHub, run:
+When a new version of the plugin is pushed to GitHub, run the same download-and-run pattern in PowerShell:
+
+```powershell
+$url = "https://raw.githubusercontent.com/dale-ctrl/prospect-mcp/main/scripts/update-plugin.ps1"
+$tmp = Join-Path $env:TEMP "prospect-update-plugin.ps1"
+try {
+  Invoke-WebRequest -UseBasicParsing -Uri $url -OutFile $tmp
+  Unblock-File -Path $tmp
+  & powershell -NoProfile -ExecutionPolicy Bypass -File $tmp
+} finally {
+  Remove-Item -Path $tmp -ErrorAction SilentlyContinue
+}
+```
+
+This calls `claude plugin update prospect-crm@wcg-prospect` and re-runs `npm install --omit=dev` (in case dependencies changed). Restart Claude Desktop to pick up the new version. If you toggled **Sync automatically** in the Cowork UI marketplace step above, skill updates land on restart without explicit action — `update-plugin.ps1` is only needed for the MCP server side.
+
+**NAS fallback (only if you can't reach GitHub):**
 
 ```
 \\192.168.1.155\sfm_data\prospect-mcp\scripts\update-plugin.cmd
 ```
-
-This calls `claude plugin update prospect-crm@wcg-prospect` and re-runs `npm install --omit=dev` (in case dependencies changed). Restart Claude Desktop to pick up the new version. If you toggled **Sync automatically** in the Cowork UI marketplace step above, skill updates land on restart without explicit action — `update-plugin.cmd` is only needed for the MCP server side.
-
-(Same `.cmd` / `.ps1` launcher pattern as setup. If the `.cmd` won't run, fall back to `powershell -NoProfile -ExecutionPolicy Bypass -File \\NAS\...\update-plugin.ps1`.)
 
 ### Optional — enable auto-updates
 

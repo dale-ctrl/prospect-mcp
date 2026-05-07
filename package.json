@@ -1,6 +1,6 @@
 {
   "name": "prospect-crm-mcp",
-  "version": "1.2.11",
+  "version": "1.2.12",
   "description": "MCP server for Prospect365 CRM - Quote management for WCG",
   "type": "module",
   "main": "dist/index.js",
