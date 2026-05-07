@@ -1,6 +1,6 @@
 {
   "name": "prospect-crm-mcp",
-  "version": "1.0.0",
+  "version": "1.1.1",
   "description": "MCP server for Prospect365 CRM - Quote management for WCG",
   "type": "module",
   "main": "dist/index.js",
@@ -10,7 +10,14 @@
     "dev": "tsc --watch",
     "test:api": "node dist/test-api.js",
     "test:messaging": "node --test dist/test-messaging.js",
-    "test:send-message": "node dist/test-send-message.js"
+    "test:divisions": "node --test dist/test-divisions.js",
+    "test:division-writes": "node --test dist/test-division-writes.js",
+    "test:dropdowns": "node --test dist/test-dropdowns.js",
+    "test:companies": "node --test dist/test-companies.js",
+    "test:sector": "node --test dist/test-sector.js",
+    "test:versa": "node --test dist/test-versa.js",
+    "test:send-message": "node dist/test-send-message.js",
+    "enable-autoupdate": "node scripts/enable-autoupdate.cjs"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.12.0",

@@ -154,6 +154,26 @@ interface SendEntityEmailArgs {
     documentNameTemplate?: string;
   };
   defaultToResolver?: () => Promise<string>;
+  /**
+   * Which Document FK column to populate when creating the PDF-attachment shell
+   * in step 4. Quote merges write `QuoteId`; Division merges write `DivisionId`.
+   * Defaults are inferred from `entitySet` — override if the mapping isn't trivial.
+   */
+  documentParentKeyField?: string;
+}
+
+/** Map an entity set to the Document FK column that anchors the attachment to it. */
+function inferDocumentParentKeyField(entitySet: string): string {
+  // Document has FK columns for Quote/Contact/Lead/Problem/ContractSchedule/Inventory/Division
+  // (see prospect-metadata.xml lines 4497-4522). Translate plural entity-set names.
+  const map: Record<string, string> = {
+    Quotes: "QuoteId",
+    Divisions: "DivisionId",
+    Contacts: "ContactId",
+    Leads: "LeadId",
+    Problems: "ProblemId",
+  };
+  return map[entitySet] ?? "QuoteId";
 }
 
 interface AttachmentResponse {
@@ -220,8 +240,9 @@ export async function sendEntityEmail(args: SendEntityEmailArgs): Promise<SendEn
     const nameResp = await mergeData(entitySet, entityId, { DocumentName: nameTemplate });
     const resolvedName = nameResp.DocumentName || nameTemplate;
 
+    const parentKey = args.documentParentKeyField ?? inferDocumentParentKeyField(entitySet);
     const doc = await client.post<DocumentRow>("Documents", {
-      QuoteId: entityId,
+      [parentKey]: entityId,
       DocumentTypeCode: args.attachment.documentTemplateCode,
       Description: resolvedName,
       DocumentDate: new Date().toISOString(),
@@ -408,9 +429,9 @@ function mimeFromExt(ext: string): string {
 
 export const sendQuoteEmailSchema = z.object({
   quoteId: z.number().int().positive().describe("The QuoteId to email."),
-  to: z.string().optional().describe("Recipient email. Defaults to the quote's primary contact email."),
-  cc: z.string().optional().describe("Cc address(es). Comma-separated if multiple."),
-  bcc: z.string().optional().describe("Bcc address(es). Comma-separated if multiple. Defaults to empty (no Bcc)."),
+  to: z.string().optional().describe("[IGNORED — SAFETY GATE] Accepted for compatibility only. The recipient is unconditionally overridden to the authenticated API user's email. To email a customer, use the ProspectCRM UI."),
+  cc: z.string().optional().describe("[IGNORED — SAFETY GATE] Accepted for compatibility only. Forced to empty on every send."),
+  bcc: z.string().optional().describe("[IGNORED — SAFETY GATE] Accepted for compatibility only. Forced to empty on every send."),
   subject: z.string().optional().describe("Email subject. If omitted, rendered from the email template's Subject field with placeholders like {QuoteId} resolved."),
   messageBody: z.string().optional().describe("Email body as HTML. If omitted, rendered from the email template + the user's signature."),
   emailTemplateCode: z.string().optional().default("_EMLQC").describe("DocumentTypeCode of the email template (DocumentTemplates where AllowAtQuote=1). Defaults to '_EMLQC'."),
@@ -481,8 +502,29 @@ export async function sendQuoteEmail(
   const args = sendQuoteEmailSchema.parse(input);
   const client = getClient();
 
-  // If caller didn't specify `to`, resolve the quote's primary contact email lazily
-  // (only if the send flow actually needs it — sendEntityEmail will call this).
+  // ─── SAFETY GATE ────────────────────────────────────────────────
+  // This MCP must never email customers. Every send is unconditionally
+  // redirected to the API user's email, regardless of caller intent.
+  // No env var, flag, or parameter bypasses this — to email a customer,
+  // use the ProspectCRM UI. If the API user's email cannot be resolved,
+  // we refuse the send rather than fall back to anything.
+  const apiUserEmail = await client.getApiUserEmail();
+  const callerTo = args.to;
+  const callerCc = args.cc;
+  const callerBcc = args.bcc;
+  if (callerTo || callerCc || callerBcc) {
+    console.error(
+      `send_quote_email: recipient overridden — caller requested ` +
+        `to="${callerTo ?? ""}" cc="${callerCc ?? ""}" bcc="${callerBcc ?? ""}", ` +
+        `sending to <${apiUserEmail}> per safety policy.`,
+    );
+  }
+  const safeTo = apiUserEmail;
+  const safeCc = "";
+  const safeBcc = "";
+
+  // The contact-email resolver is dead code under the safety gate (safeTo
+  // is always non-empty) but kept so sendEntityEmail's signature is unchanged.
   const resolveContactEmail = async (): Promise<string> => {
     const q = await client.getById<QuoteForSend>(
       "Quotes",
@@ -502,9 +544,9 @@ export async function sendQuoteEmail(
   const result = await sendEntityEmail({
     entitySet: "Quotes",
     entityId: args.quoteId,
-    to: args.to,
-    cc: args.cc,
-    bcc: args.bcc,
+    to: safeTo,
+    cc: safeCc,
+    bcc: safeBcc,
     subject: args.subject,
     messageBody: args.messageBody,
     emailTemplateCode: args.emailTemplateCode,
@@ -529,7 +571,14 @@ export async function sendQuoteEmail(
     fromAddress = sent.FromAddress ?? null;
   } catch { /* enrichment is best-effort */ }
 
+  const safetyBanner =
+    callerTo || callerCc || callerBcc
+      ? `⚠️ SAFETY GATE: caller-supplied to/cc/bcc were ignored. Email was sent to the API user only.`
+      : `🔒 SAFETY GATE: this MCP only emails the API user. Email was sent to the API user.`;
+
   return [
+    safetyBanner,
+    ``,
     `Email sent for Quote #${args.quoteId}`,
     ``,
     `**Sent-email DocumentId:** ${result.sentMessageDocumentId}`,
@@ -538,8 +587,7 @@ export async function sendQuoteEmail(
     result.attachmentDocumentTemplateCode ? `**PDF template:** ${result.attachmentDocumentTemplateCode}` : `**PDF template:** (none — attachPdf=false)`,
     result.attachmentFilename ? `**Attachment filename:** ${result.attachmentFilename}` : "",
     `**Subject:** ${result.subject}`,
-    `**To:** ${result.to}`,
-    result.cc ? `**Cc:** ${result.cc}` : "",
+    `**To:** ${result.to}  ← API user (safety gate)`,
     fromAddress ? `**From:** ${fromAddress}` : "",
     sentAt ? `**Sent:** ${sentAt}` : "",
     ``,

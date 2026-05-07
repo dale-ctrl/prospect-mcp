@@ -15,7 +15,10 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 const CONFIG_PATH = join(__dirname, "..", "config", "permissions.json");
 const PORT = 3333;
-const PROSPECT_BASE = "https://crm-odata-v1.prospect365.com";
+// Regional write-capable host — the public-docs `crm-odata-v1.prospect365.com`
+// is a read-only shim that silently no-ops bound actions. Matches the default
+// in src/client.ts.
+const PROSPECT_BASE = process.env.PROSPECT_BASE_URL || "https://api-v1-westeurope.prospect365.com";
 
 const MIME_TYPES = {
   ".html": "text/html",

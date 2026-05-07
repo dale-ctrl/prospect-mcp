@@ -1,0 +1,167 @@
+/**
+ * MCP tool handlers for Enquiry operations.
+ * Enquiries are inbound leads/web forms that can be converted to contacts/opportunities.
+ */
+import { z } from "zod";
+export declare const searchEnquiriesSchema: z.ZodObject<{
+    forename: z.ZodOptional<z.ZodString>;
+    surname: z.ZodOptional<z.ZodString>;
+    companyName: z.ZodOptional<z.ZodString>;
+    email: z.ZodOptional<z.ZodString>;
+    source: z.ZodOptional<z.ZodString>;
+    dateFrom: z.ZodOptional<z.ZodString>;
+    dateTo: z.ZodOptional<z.ZodString>;
+    convertedOnly: z.ZodDefault<z.ZodOptional<z.ZodBoolean>>;
+    unconvertedOnly: z.ZodDefault<z.ZodOptional<z.ZodBoolean>>;
+    top: z.ZodDefault<z.ZodOptional<z.ZodNumber>>;
+}, "strip", z.ZodTypeAny, {
+    top: number;
+    convertedOnly: boolean;
+    unconvertedOnly: boolean;
+    dateFrom?: string | undefined;
+    dateTo?: string | undefined;
+    source?: string | undefined;
+    forename?: string | undefined;
+    surname?: string | undefined;
+    email?: string | undefined;
+    companyName?: string | undefined;
+}, {
+    dateFrom?: string | undefined;
+    dateTo?: string | undefined;
+    top?: number | undefined;
+    source?: string | undefined;
+    forename?: string | undefined;
+    surname?: string | undefined;
+    email?: string | undefined;
+    companyName?: string | undefined;
+    convertedOnly?: boolean | undefined;
+    unconvertedOnly?: boolean | undefined;
+}>;
+export declare const getEnquirySchema: z.ZodObject<{
+    enquiryId: z.ZodNumber;
+}, "strip", z.ZodTypeAny, {
+    enquiryId: number;
+}, {
+    enquiryId: number;
+}>;
+export declare const createEnquirySchema: z.ZodObject<{
+    title: z.ZodOptional<z.ZodString>;
+    forename: z.ZodOptional<z.ZodString>;
+    surname: z.ZodOptional<z.ZodString>;
+    jobTitle: z.ZodOptional<z.ZodString>;
+    email: z.ZodOptional<z.ZodString>;
+    companyName: z.ZodOptional<z.ZodString>;
+    website: z.ZodOptional<z.ZodString>;
+    phoneNumber: z.ZodOptional<z.ZodString>;
+    mobileNumber: z.ZodOptional<z.ZodString>;
+    description: z.ZodOptional<z.ZodString>;
+    source: z.ZodOptional<z.ZodString>;
+    enquiryFormId: z.ZodOptional<z.ZodString>;
+    sourceTypeCode: z.ZodOptional<z.ZodString>;
+    utmSource: z.ZodOptional<z.ZodString>;
+    utmMedium: z.ZodOptional<z.ZodString>;
+    utmCampaign: z.ZodOptional<z.ZodString>;
+    utmTerm: z.ZodOptional<z.ZodString>;
+    utmContent: z.ZodOptional<z.ZodString>;
+    addressLine1: z.ZodOptional<z.ZodString>;
+    addressLine2: z.ZodOptional<z.ZodString>;
+    addressLine3: z.ZodOptional<z.ZodString>;
+    postcode: z.ZodOptional<z.ZodString>;
+    country: z.ZodOptional<z.ZodString>;
+}, "strip", z.ZodTypeAny, {
+    description?: string | undefined;
+    title?: string | undefined;
+    postcode?: string | undefined;
+    phoneNumber?: string | undefined;
+    website?: string | undefined;
+    source?: string | undefined;
+    addressLine1?: string | undefined;
+    addressLine2?: string | undefined;
+    addressLine3?: string | undefined;
+    country?: string | undefined;
+    forename?: string | undefined;
+    surname?: string | undefined;
+    jobTitle?: string | undefined;
+    email?: string | undefined;
+    companyName?: string | undefined;
+    mobileNumber?: string | undefined;
+    enquiryFormId?: string | undefined;
+    sourceTypeCode?: string | undefined;
+    utmSource?: string | undefined;
+    utmMedium?: string | undefined;
+    utmCampaign?: string | undefined;
+    utmTerm?: string | undefined;
+    utmContent?: string | undefined;
+}, {
+    description?: string | undefined;
+    title?: string | undefined;
+    postcode?: string | undefined;
+    phoneNumber?: string | undefined;
+    website?: string | undefined;
+    source?: string | undefined;
+    addressLine1?: string | undefined;
+    addressLine2?: string | undefined;
+    addressLine3?: string | undefined;
+    country?: string | undefined;
+    forename?: string | undefined;
+    surname?: string | undefined;
+    jobTitle?: string | undefined;
+    email?: string | undefined;
+    companyName?: string | undefined;
+    mobileNumber?: string | undefined;
+    enquiryFormId?: string | undefined;
+    sourceTypeCode?: string | undefined;
+    utmSource?: string | undefined;
+    utmMedium?: string | undefined;
+    utmCampaign?: string | undefined;
+    utmTerm?: string | undefined;
+    utmContent?: string | undefined;
+}>;
+export declare const updateEnquirySchema: z.ZodObject<{
+    enquiryId: z.ZodNumber;
+    title: z.ZodOptional<z.ZodString>;
+    forename: z.ZodOptional<z.ZodString>;
+    surname: z.ZodOptional<z.ZodString>;
+    jobTitle: z.ZodOptional<z.ZodString>;
+    email: z.ZodOptional<z.ZodString>;
+    companyName: z.ZodOptional<z.ZodString>;
+    website: z.ZodOptional<z.ZodString>;
+    phoneNumber: z.ZodOptional<z.ZodString>;
+    mobileNumber: z.ZodOptional<z.ZodString>;
+    description: z.ZodOptional<z.ZodString>;
+    source: z.ZodOptional<z.ZodString>;
+    sourceTypeCode: z.ZodOptional<z.ZodString>;
+}, "strip", z.ZodTypeAny, {
+    enquiryId: number;
+    description?: string | undefined;
+    title?: string | undefined;
+    phoneNumber?: string | undefined;
+    website?: string | undefined;
+    source?: string | undefined;
+    forename?: string | undefined;
+    surname?: string | undefined;
+    jobTitle?: string | undefined;
+    email?: string | undefined;
+    companyName?: string | undefined;
+    mobileNumber?: string | undefined;
+    sourceTypeCode?: string | undefined;
+}, {
+    enquiryId: number;
+    description?: string | undefined;
+    title?: string | undefined;
+    phoneNumber?: string | undefined;
+    website?: string | undefined;
+    source?: string | undefined;
+    forename?: string | undefined;
+    surname?: string | undefined;
+    jobTitle?: string | undefined;
+    email?: string | undefined;
+    companyName?: string | undefined;
+    mobileNumber?: string | undefined;
+    sourceTypeCode?: string | undefined;
+}>;
+export declare function createEnquiry(args: z.infer<typeof createEnquirySchema>): Promise<string>;
+export declare function updateEnquiry(args: z.infer<typeof updateEnquirySchema>): Promise<string>;
+export declare function searchEnquiries(args: z.infer<typeof searchEnquiriesSchema>): Promise<string>;
+export declare function getEnquiry(args: z.infer<typeof getEnquirySchema>): Promise<string>;
+//# sourceMappingURL=enquiries.d.ts.map

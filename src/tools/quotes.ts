@@ -4,9 +4,22 @@
 
 import { z } from "zod";
 import { getClient } from "../client.js";
-import type { Quote, QuoteCreate, QuoteLine } from "../types/prospect.js";
+import type { Quote, QuoteCreate, QuoteLine, Lead } from "../types/prospect.js";
 
 const OPERATING_COMPANY_CODE = "A"; // Westcountry Group
+const QUOTE_DESCRIPTION_MAX = 250; // Quote.Description column cap
+
+// When a quote is linked to an opportunity, WCG policy is that the quote
+// description must mirror the opportunity description so the two stay in sync
+// across the pipeline. Returns null when the lead has no description on file
+// (caller falls back to its own description arg in that case).
+async function fetchOpportunityDescription(leadId: number): Promise<string | null> {
+  const client = getClient();
+  const lead = await client.getById<Lead>("Leads", leadId, "$select=Description");
+  const desc = lead.Description?.trim();
+  if (!desc) return null;
+  return desc.length > QUOTE_DESCRIPTION_MAX ? desc.slice(0, QUOTE_DESCRIPTION_MAX) : desc;
+}
 
 // ─── Schemas ───────────────────────────────────────────────────
 
@@ -27,8 +40,8 @@ export const getQuoteSchema = z.object({
 
 export const createQuoteSchema = z.object({
   contactId: z.number().describe("ContactId for the customer. Use search_contacts to find this."),
-  leadId: z.number().optional().describe("LeadId (opportunity) to link this quote to. Use search_opportunities to find."),
-  description: z.string().optional().describe("Quote description/title"),
+  leadId: z.number().optional().describe("LeadId (opportunity) to link this quote to. Use search_opportunities to find. When supplied, the quote description is automatically copied from the opportunity's Description, overriding any `description` arg below."),
+  description: z.string().optional().describe("Quote description/title. IGNORED when `leadId` is supplied — the opportunity's description is used instead. Only used when there is no linked opportunity, or as a fallback when the linked opportunity has no description on file."),
   salesPersonId: z.string().optional().describe("Salesperson user code, e.g. 'DL'"),
   orderDueDate: z.string().optional().describe("Due date in ISO format"),
   customerOrderReference: z.string().optional().describe("Customer's PO or reference number"),
@@ -45,8 +58,8 @@ export const createQuoteSchema = z.object({
 
 export const updateQuoteSchema = z.object({
   quoteId: z.number().describe("The QuoteId to update"),
-  leadId: z.number().optional().describe("LeadId (opportunity) to link this quote to"),
-  description: z.string().optional(),
+  leadId: z.number().optional().describe("LeadId (opportunity) to link this quote to. When supplied, the quote description is automatically re-copied from the opportunity's Description, overriding any `description` arg below."),
+  description: z.string().optional().describe("New quote description. IGNORED when `leadId` is also being set on this update — the opportunity's description is used instead. Used as a fallback only when the linked opportunity has no description on file."),
   salesPersonId: z.string().optional(),
   orderNumber: z.string().optional(),
   orderDueDate: z.string().optional(),
@@ -64,7 +77,7 @@ export const updateQuoteSchema = z.object({
 
 export const duplicateQuoteSchema = z.object({
   quoteId: z.number().describe("The QuoteId to duplicate"),
-  newDescription: z.string().optional().describe("Description for the new quote. If omitted, copies the original with 'COPY - ' prefix."),
+  newDescription: z.string().optional().describe("Description for the new quote. IGNORED when the original quote is linked to an opportunity — the opportunity's description is used instead so the duplicate stays in sync. Falls back to 'COPY - <original description>' only when there is no linked opportunity."),
   newContactId: z.number().optional().describe("ContactId for the new quote. If omitted, uses the same contact as the original."),
   newSalesPersonId: z.string().optional().describe("Salesperson for the new quote. If omitted, uses the same as the original."),
 });
@@ -242,9 +255,22 @@ export async function createQuote(args: z.infer<typeof createQuoteSchema>): Prom
     OperatingCompanyCode: OPERATING_COMPANY_CODE,
   };
 
+  // WCG rule: when linked to an opportunity, the quote description always
+  // mirrors the opportunity's. Caller's `description` is only used as a
+  // fallback if the lead has no description on file.
+  let resolvedDescription = args.description;
+  let descriptionSource: "opportunity" | "argument" | "none" = args.description ? "argument" : "none";
+  if (args.leadId !== undefined) {
+    const fromLead = await fetchOpportunityDescription(args.leadId);
+    if (fromLead) {
+      resolvedDescription = fromLead;
+      descriptionSource = "opportunity";
+    }
+  }
+
   // Map optional fields
   if (args.leadId !== undefined) body.LeadId = args.leadId;
-  if (args.description !== undefined) body.Description = args.description;
+  if (resolvedDescription !== undefined) body.Description = resolvedDescription;
   if (args.salesPersonId !== undefined) body.SalesPersonId = args.salesPersonId;
   if (args.orderDueDate !== undefined) body.OrderDueDate = args.orderDueDate;
   if (args.customerOrderReference !== undefined) body.CustomerOrderReference = args.customerOrderReference;
@@ -260,10 +286,17 @@ export async function createQuote(args: z.infer<typeof createQuoteSchema>): Prom
 
   const created = await client.post<Quote>("Quotes", body);
 
+  const descriptionNote =
+    descriptionSource === "opportunity"
+      ? " (copied from linked opportunity)"
+      : args.leadId !== undefined && descriptionSource === "argument"
+      ? " (linked opportunity has no description — used `description` arg as fallback)"
+      : "";
+
   return [
     `✅ Quote created successfully!`,
     `**QuoteId:** ${created.QuoteId}`,
-    `**Description:** ${created.Description || "(none)"}`,
+    `**Description:** ${created.Description || "(none)"}${descriptionNote}`,
     `**Contact:** ${created.ContactId}`,
     `**Status:** ${created.StatusId}`,
     `**Created:** ${created.Created?.substring(0, 10) || "now"}`,
@@ -277,10 +310,23 @@ export async function updateQuote(args: z.infer<typeof updateQuoteSchema>): Prom
   const client = getClient();
   const { quoteId, ...fields } = args;
 
+  // WCG rule: when relinking to an opportunity, the quote description is
+  // re-copied from that opportunity. Caller's `description` is only used as
+  // a fallback if the lead has no description on file.
+  let resolvedDescription = fields.description;
+  let descriptionSource: "opportunity" | "argument" | "none" = fields.description !== undefined ? "argument" : "none";
+  if (fields.leadId !== undefined) {
+    const fromLead = await fetchOpportunityDescription(fields.leadId);
+    if (fromLead) {
+      resolvedDescription = fromLead;
+      descriptionSource = "opportunity";
+    }
+  }
+
   // Build PATCH body from provided fields, mapping camelCase args → PascalCase API fields
   const body: Record<string, unknown> = {};
   if (fields.leadId !== undefined) body.LeadId = fields.leadId;
-  if (fields.description !== undefined) body.Description = fields.description;
+  if (resolvedDescription !== undefined) body.Description = resolvedDescription;
   if (fields.salesPersonId !== undefined) body.SalesPersonId = fields.salesPersonId;
   if (fields.orderNumber !== undefined) body.OrderNumber = fields.orderNumber;
   if (fields.orderDueDate !== undefined) body.OrderDueDate = fields.orderDueDate;
@@ -301,7 +347,14 @@ export async function updateQuote(args: z.infer<typeof updateQuoteSchema>): Prom
 
   await client.patch<Quote>("Quotes", quoteId, body);
 
-  return `✅ Quote #${quoteId} updated successfully. Fields changed: ${Object.keys(body).join(", ")}`;
+  const noteParts: string[] = [];
+  if (descriptionSource === "opportunity") {
+    noteParts.push("Description was copied from the linked opportunity.");
+  } else if (fields.leadId !== undefined && fields.description !== undefined && descriptionSource === "argument") {
+    noteParts.push("Linked opportunity has no description on file — used `description` arg as fallback.");
+  }
+  const note = noteParts.length ? `\n${noteParts.join(" ")}` : "";
+  return `✅ Quote #${quoteId} updated successfully. Fields changed: ${Object.keys(body).join(", ")}${note}`;
 }
 
 export async function duplicateQuote(args: z.infer<typeof duplicateQuoteSchema>): Promise<string> {
@@ -314,13 +367,32 @@ export async function duplicateQuote(args: z.infer<typeof duplicateQuoteSchema>)
 
   const original = await client.getById<Quote>("Quotes", args.quoteId, `$expand=${expand}`);
 
+  // WCG rule: when the original quote is linked to an opportunity, the
+  // duplicate stays linked to that same opportunity AND its description is
+  // re-copied from the opportunity (so a refreshed opp description flows
+  // through). Caller's `newDescription` is only used as a fallback.
+  let resolvedDescription: string | undefined = args.newDescription;
+  let descriptionSource: "opportunity" | "argument" | "copy-prefix" =
+    args.newDescription ? "argument" : "copy-prefix";
+  if (original.LeadId != null) {
+    const fromLead = await fetchOpportunityDescription(original.LeadId);
+    if (fromLead) {
+      resolvedDescription = fromLead;
+      descriptionSource = "opportunity";
+    }
+  }
+  if (resolvedDescription === undefined) {
+    resolvedDescription = `COPY - ${original.Description || "Quote #" + original.QuoteId}`;
+  }
+
   // Step 2: Create the new quote header
   const newHeader: Record<string, unknown> = {
     ContactId: args.newContactId || original.ContactId,
     OperatingCompanyCode: OPERATING_COMPANY_CODE,
-    Description: args.newDescription || `COPY - ${original.Description || "Quote #" + original.QuoteId}`,
+    Description: resolvedDescription,
     SalesPersonId: args.newSalesPersonId || original.SalesPersonId,
   };
+  if (original.LeadId != null) newHeader.LeadId = original.LeadId;
 
   if (original.OrderDueDate) newHeader.OrderDueDate = original.OrderDueDate;
   if (original.CustomerOrderReference) newHeader.CustomerOrderReference = original.CustomerOrderReference;
@@ -365,15 +437,25 @@ export async function duplicateQuote(args: z.infer<typeof duplicateQuoteSchema>)
     linesCopied++;
   }
 
+  const descriptionNote =
+    descriptionSource === "opportunity"
+      ? " (copied from linked opportunity)"
+      : original.LeadId != null && descriptionSource === "argument"
+      ? " (linked opportunity has no description — used `newDescription` arg as fallback)"
+      : original.LeadId != null && descriptionSource === "copy-prefix"
+      ? " (linked opportunity has no description — fell back to COPY prefix)"
+      : "";
+
   return [
     `Quote duplicated successfully!`,
     `**Original:** Quote #${args.quoteId} — ${original.Description || "(no description)"}`,
     `**New QuoteId:** ${newQuoteId}`,
-    `**Description:** ${newQuote.Description}`,
+    `**Description:** ${newQuote.Description}${descriptionNote}`,
     `**Lines copied:** ${linesCopied}`,
     `**Contact:** ${newQuote.ContactId}`,
+    original.LeadId != null ? `**Linked opportunity:** Lead #${original.LeadId} (carried from original)` : "",
     `**CRM Link:** ${newQuote.RecordLink || "N/A"}`,
-  ].join("\n");
+  ].filter(Boolean).join("\n");
 }
 
 export async function addQuoteLineGroup(args: z.infer<typeof addQuoteLineGroupSchema>): Promise<string> {

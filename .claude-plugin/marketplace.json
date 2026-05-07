@@ -1,0 +1,15 @@
+{
+  "name": "wcg-prospect",
+  "owner": {
+    "name": "Westcountry Group",
+    "email": "dale@westcountrygroup.com",
+    "url": "https://github.com/dale-ctrl"
+  },
+  "plugins": [
+    {
+      "name": "prospect-crm",
+      "source": ".",
+      "description": "Prospect CRM (prospect365.com) MCP connector with bundled workflow skills. Provides quote / contact / division / document tools and the versa-maintenance-contracts-bulk skill for producing Versa Maintenance Contracts in bulk."
+    }
+  ]
+}

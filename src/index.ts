@@ -23,6 +23,7 @@
 
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
+import { getClient } from "./client.js";
 
 // Tool schemas and handlers
 import {
@@ -44,7 +45,9 @@ import {
 import {
   searchContactsSchema, searchContacts,
   searchProductsSchema, searchProducts,
+  getProductDetailSchema, getProductDetail,
   searchDivisionsSchema, searchDivisions,
+  listDivisionsSchema, listDivisions,
   getQuoteStatusesSchema, getQuoteStatuses,
 } from "./tools/lookups.js";
 
@@ -64,6 +67,26 @@ import {
   getContactRolesSchema, getContactRoles,
   lookupCompanyInfoSchema, lookupCompanyInfo,
 } from "./tools/contacts.js";
+
+import {
+  listDropdownOptionsSchema, listDropdownOptions,
+  deleteDivisionSchema, deleteDivision,
+} from "./tools/dropdowns.js";
+
+import {
+  getCompanySchema, getCompany,
+  updateCompanySchema, updateCompany,
+  listCompaniesSchema, listCompanies,
+} from "./tools/companies.js";
+
+import {
+  inspectDivisionCategorisationPanelSchema, inspectDivisionCategorisationPanel,
+} from "./tools/inspect.js";
+
+import {
+  updateDivisionVersaMaintenanceSchema, updateDivisionVersaMaintenance,
+  mergeDivisionDocumentSchema, mergeDivisionDocument,
+} from "./tools/versa-maintenance.js";
 
 import {
   getProductCategoriesSchema, getProductCategories,
@@ -365,6 +388,21 @@ function resolveUserPermissions(): Record<string, Record<string, boolean>> {
   }
 }
 
+// Warm the API-user-email cache used by send_quote_email's safety gate.
+// Best-effort: failure here does not block server startup (other tools still
+// work), but send_quote_email itself will refuse and surface the error.
+(async () => {
+  try {
+    const email = await getClient().getApiUserEmail();
+    console.error(`send_quote_email safety gate: recipient locked to API user <${email}>.`);
+  } catch (err) {
+    console.error(
+      `send_quote_email safety gate: API user email NOT resolved at boot — ` +
+        `sends will refuse until this is fixed. Reason: ${(err as Error).message}`,
+    );
+  }
+})();
+
 // Map each write tool name to its module and action type
 const TOOL_PERMISSION_MAP: Record<string, { module: string; action: string }> = {
   create_quote: { module: "quotes", action: "create" },
@@ -471,7 +509,7 @@ const server = new McpServer({
     `- Calendar Events: search diary entries (search_calendar_events)`,
     `- Activity & History: activity feed, spoke history, recall/follow-up reminders (search_activity_feed, search_spoke_history, search_recalls)`,
     `- Tags: list tags and find tagged records across all entities (get_tags, search_tag_assignments)`,
-    `- Pricing: price bands, price lists, full product pricing (get_product_pricing)`,
+    `- Pricing: price bands, price lists, full product pricing (get_product_pricing). For supplier / memo / spec fields use get_product_detail.`,
     `- Division analytics: RFM scoring, sales history, profiling (get_division_rfm, get_division_sales_history)`,
     `- Custom fields: Xtra fields on quotes, contacts, divisions, leads, etc. (get_xtra_fields)`,
     `- Reports: cross-module reports like "accounts without tasks for specific users" (report_accounts_without_tasks)`,
@@ -703,11 +741,139 @@ server.tool(
 
 server.tool(
   "search_divisions",
-  "Search for companies/divisions (accounts) in Prospect CRM by name or account code. Returns DivisionId, account manager, territory, and address.",
+  "Search for companies/divisions (accounts) in Prospect CRM by name or account code. Optionally narrow by structured filters (customerType, relationship, territoryCode, accountManager, postcode prefix). Returns DivisionId, account manager, territory, and address. For bulk dedupe/reporting use list_divisions instead.",
   searchDivisionsSchema.shape,
   async (args) => {
     try {
       const result = await searchDivisions(searchDivisionsSchema.parse(args));
+      return { content: [{ type: "text" as const, text: result }] };
+    } catch (err) {
+      return { content: [{ type: "text" as const, text: `Error: ${(err as Error).message}` }], isError: true };
+    }
+  }
+);
+
+server.tool(
+  "list_divisions",
+  "Bulk-list Divisions for dedupe/reporting work. Filter by customerType, relationship, territoryCode, accountManager, or postcode prefix. Auto-paginates up to 5000 records when skip is omitted; pass skip+pageSize for manual paging. Returns terse JSON: { totalCount, returnedCount, truncated, skip, pageSize, records }.",
+  listDivisionsSchema.shape,
+  async (args) => {
+    try {
+      const result = await listDivisions(listDivisionsSchema.parse(args));
+      return { content: [{ type: "text" as const, text: result }] };
+    } catch (err) {
+      return { content: [{ type: "text" as const, text: `Error: ${(err as Error).message}` }], isError: true };
+    }
+  }
+);
+
+server.tool(
+  "list_dropdown_options",
+  "List the option rows behind a named dropdown. Use this to discover the FK code for a UI label (e.g. customerType='M.A.T.' → 'Entity.DivisionXtra.StandardDropdownField2.04a2188e'). Supports custom DivisionXtra dropdowns (customerType, paperAccountManager, officeAllocated, colouredPaperPriceList, laminatingPouchesList, customDropdown1..5) and built-in Division FKs (standardIndustryCode, deliveryZoneCode, priorityId, turnoverId). Returns { field, count, options: [{code, label}] }.",
+  listDropdownOptionsSchema.shape,
+  async (args) => {
+    try {
+      const result = await listDropdownOptions(listDropdownOptionsSchema.parse(args));
+      return { content: [{ type: "text" as const, text: result }] };
+    } catch (err) {
+      return { content: [{ type: "text" as const, text: `Error: ${(err as Error).message}` }], isError: true };
+    }
+  }
+);
+
+server.tool(
+  "delete_division",
+  "Delete a Division and its linked rows (DivisionXtra, contacts, quotes). DESTRUCTIVE — requires confirmed=true as a guardrail. Returns { ok, divisionId, deletedAt }.",
+  deleteDivisionSchema.shape,
+  async (args) => {
+    try {
+      const result = await deleteDivision(deleteDivisionSchema.parse(args));
+      return { content: [{ type: "text" as const, text: result }] };
+    } catch (err) {
+      return { content: [{ type: "text" as const, text: `Error: ${(err as Error).message}` }], isError: true };
+    }
+  }
+);
+
+server.tool(
+  "get_company",
+  "Fetch a Company record (parent of Division) including the Group Type. Returns the raw Company JSON with the Type navigation expanded.",
+  getCompanySchema.shape,
+  async (args) => {
+    try {
+      const result = await getCompany(getCompanySchema.parse(args));
+      return { content: [{ type: "text" as const, text: result }] };
+    } catch (err) {
+      return { content: [{ type: "text" as const, text: `Error: ${(err as Error).message}` }], isError: true };
+    }
+  }
+);
+
+server.tool(
+  "update_company",
+  "Patch fields on a Company record (parent of Division). Supports companyGroupType (label or FK), name, source (free-text), alternateReference, longDescription.",
+  updateCompanySchema.shape,
+  async (args) => {
+    try {
+      const result = await updateCompany(updateCompanySchema.parse(args));
+      return { content: [{ type: "text" as const, text: result }] };
+    } catch (err) {
+      return { content: [{ type: "text" as const, text: `Error: ${(err as Error).message}` }], isError: true };
+    }
+  }
+);
+
+server.tool(
+  "list_companies",
+  "Bulk-list Companies. Filter by name (contains) or companyGroupType (FK or label). Auto-paginates up to 5000 records.",
+  listCompaniesSchema.shape,
+  async (args) => {
+    try {
+      const result = await listCompanies(listCompaniesSchema.parse(args));
+      return { content: [{ type: "text" as const, text: result }] };
+    } catch (err) {
+      return { content: [{ type: "text" as const, text: `Error: ${(err as Error).message}` }], isError: true };
+    }
+  }
+);
+
+server.tool(
+  "inspect_division_categorisation_panel",
+  "Diagnostic: dump every populated field on a Division, its DivisionXtra, the parent Company, and CompanyXtra. Use to identify which DB columns back UI labels (e.g. AREA LOCATION, SCHOOL STATUS) when the dictionary mapping isn't exposed via OData metadata. Run on a record that has the labels visibly populated in Prospect's UI.",
+  inspectDivisionCategorisationPanelSchema.shape,
+  async (args) => {
+    try {
+      const result = await inspectDivisionCategorisationPanel(
+        inspectDivisionCategorisationPanelSchema.parse(args),
+      );
+      return { content: [{ type: "text" as const, text: result }] };
+    } catch (err) {
+      return { content: [{ type: "text" as const, text: `Error: ${(err as Error).message}` }], isError: true };
+    }
+  }
+);
+
+server.tool(
+  "update_division_versa_maintenance",
+  "Patch the Versa Maintenance custom fields on a Division: 'Quantity and Equipment Maintained' (DivisionXtra.StandardTextField5) and 'Total Maintenance Value' (DivisionXtra.StandardTextField6). Numbers passed as totalMaintenanceValue are formatted to 2dp. Upserts the DivisionXtra row if it doesn't exist.",
+  updateDivisionVersaMaintenanceSchema.shape,
+  async (args) => {
+    try {
+      const result = await updateDivisionVersaMaintenance(args);
+      return { content: [{ type: "text" as const, text: result }] };
+    } catch (err) {
+      return { content: [{ type: "text" as const, text: `Error: ${(err as Error).message}` }], isError: true };
+    }
+  }
+);
+
+server.tool(
+  "merge_division_document",
+  "Render and send a Division-level document (e.g. Versa Maintenance Contract template '23caad'). Mirrors send_quote_email's flow but bound to /Divisions instead of /Quotes — uses Division.MergeData + Division.SendMessage actions. SAFETY GATE: every email is forced to the API user's address; the document is always attached to the Division regardless. Returns attachmentDocumentId for use with get_merge_output.",
+  mergeDivisionDocumentSchema.shape,
+  async (args) => {
+    try {
+      const result = await mergeDivisionDocument(args);
       return { content: [{ type: "text" as const, text: result }] };
     } catch (err) {
       return { content: [{ type: "text" as const, text: `Error: ${(err as Error).message}` }], isError: true };
@@ -1475,6 +1641,20 @@ server.tool(
   }
 );
 
+server.tool(
+  "get_product_detail",
+  "Get the full ProductItem record for one SKU — pricing, supplier, references, and the long-form notes (ExtendedDescription, InternalNotes, Specification). Use this when search_products or get_product_pricing don't give you the field you need.",
+  getProductDetailSchema.shape,
+  async (args) => {
+    try {
+      const result = await getProductDetail(getProductDetailSchema.parse(args));
+      return { content: [{ type: "text" as const, text: result }] };
+    } catch (err) {
+      return { content: [{ type: "text" as const, text: `Error: ${(err as Error).message}` }], isError: true };
+    }
+  }
+);
+
 // ─── Contact Extras Tool ──────────────────────────────────────
 
 server.tool(
@@ -1791,7 +1971,7 @@ server.tool("search_quoting_lessons", "Search saved quoting lessons by keyword �
 
 registerWriteTool(
   "send_quote_email",
-  "Send a quote by email. Replicates the 7-call flow Prospect's own UI uses (MergeData × 3, Documents POST for the PDF shell, DocumentAttachments/AttachExistingDocument to stage it, SendMessage). All inputs optional except quoteId — `to` defaults to the quote's primary contact email, `subject`/`messageBody` render from the email template if omitted, `emailTemplateCode` defaults to '_EMLQC', `quoteTemplateCode` defaults to '_QUOTE'. If the user asks for a specific template (e.g. 'the Education template', 'the Versa Wall Pocket one'), call list_quote_templates first to find the matching DocumentTypeCode, then pass it via quoteTemplateCode (or emailTemplateCode for cover-email variants). Set attachPdf=false for body-only email. Returns the sent-email DocumentId + the attachment DocumentId — feed the latter to get_merge_output to retrieve the source document.",
+  "Send a quote by email. SAFETY: this MCP can only email quotes back to the authenticated API user — never to customers, CCs, or BCCs. The to/cc/bcc parameters are accepted for compatibility but are ignored. To email a customer, use the ProspectCRM UI. Replicates the 7-call flow Prospect's own UI uses (MergeData × 3, Documents POST for the PDF shell, DocumentAttachments/AttachExistingDocument to stage it, SendMessage). All inputs optional except quoteId — `subject`/`messageBody` render from the email template if omitted, `emailTemplateCode` defaults to '_EMLQC', `quoteTemplateCode` defaults to '_QUOTE'. If the user asks for a specific template (e.g. 'the Education template', 'the Versa Wall Pocket one'), call list_quote_templates first to find the matching DocumentTypeCode, then pass it via quoteTemplateCode (or emailTemplateCode for cover-email variants). Set attachPdf=false for body-only email. Returns the sent-email DocumentId + the attachment DocumentId — feed the latter to get_merge_output to retrieve the source document.",
   sendQuoteEmailSchema.shape,
   async (args) => {
     try {

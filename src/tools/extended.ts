@@ -159,6 +159,12 @@ export async function getDivisionDetails(args: z.infer<typeof getDivisionDetails
     return `  - ${name} (ID: ${c.ContactId}) — ${c.JobTitle || "N/A"} — ${c.Email || "N/A"}`;
   });
 
+  // Versa Maintenance fields live on DivisionXtra.StandardTextField5/6 — surface
+  // them inline so callers don't need a separate Xtra fetch (matches the
+  // Versa tab in the Prospect UI).
+  const equipmentMaintained = (xtra?.StandardTextField5 ?? null) as string | null;
+  const totalMaintenanceValue = (xtra?.StandardTextField6 ?? null) as string | null;
+
   const output = [
     `# Division Details`,
     `**Name:** ${div.Name || "N/A"}`,
@@ -178,6 +184,12 @@ export async function getDivisionDetails(args: z.infer<typeof getDivisionDetails
     ``,
     `**Division Link:** ${div.RecordLink || "N/A"}`,
   ];
+
+  if (equipmentMaintained || totalMaintenanceValue) {
+    output.push("", "## Versa Maintenance");
+    if (equipmentMaintained) output.push(`**Equipment Maintained:** ${equipmentMaintained}`);
+    if (totalMaintenanceValue) output.push(`**Total Maintenance Value:** ${totalMaintenanceValue}`);
+  }
 
   if (xtra) {
     output.push("", "## Custom Fields (Xtra)");

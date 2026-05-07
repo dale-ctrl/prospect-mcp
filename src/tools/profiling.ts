@@ -26,42 +26,42 @@ export const getContactProfilingSchema = z.object({
 
 // ─── Helpers ──────────────────────────────────────────────────
 
-/** Build a select string for all standard Xtra fields */
-function xtraSelectFields(): string {
-  const fields: string[] = [];
-  for (let i = 1; i <= 10; i++) {
-    fields.push(`StandardTextField${i}`);
-    fields.push(`StandardDecimalField${i}`);
-  }
-  for (let i = 1; i <= 5; i++) {
-    fields.push(`StandardDateField${i}`);
-    fields.push(`StandardBooleanField${i}`);
-  }
-  return fields.join(",");
-}
-
-/** Format Xtra fields into readable output */
+/**
+ * Format Xtra fields into readable output.
+ *
+ * The Xtra entities don't have a uniform shape across tenants — DivisionXtra
+ * exposes StandardDecimalField1..5 only, has StandardFlagField (not
+ * StandardBooleanField), and adds StandardDropdownField1..5 + StandardMemoField1..5.
+ * Iterate over whatever the API actually returned, classify by name prefix,
+ * and skip null/empty values.
+ */
 function formatXtraFields(data: Record<string, unknown>): string {
   const lines: string[] = [];
+  const buckets: Array<[string, RegExp]> = [
+    ["Text", /^StandardTextField(\d+)$/],
+    ["Decimal", /^StandardDecimalField(\d+)$/],
+    ["Date", /^StandardDateField(\d+)$/],
+    ["Flag", /^StandardFlagField(\d+)$/],
+    ["Boolean", /^StandardBooleanField(\d+)$/],
+    ["Memo", /^StandardMemoField(\d+)$/],
+    ["Dropdown", /^StandardDropdownField(\d+)$/],
+  ];
 
-  for (let i = 1; i <= 10; i++) {
-    const textVal = data[`StandardTextField${i}`];
-    if (textVal != null && textVal !== "") {
-      lines.push(`**Text ${i}:** ${textVal}`);
-    }
-    const decVal = data[`StandardDecimalField${i}`];
-    if (decVal != null) {
-      lines.push(`**Decimal ${i}:** ${decVal}`);
-    }
-  }
-  for (let i = 1; i <= 5; i++) {
-    const dateVal = data[`StandardDateField${i}`];
-    if (dateVal != null) {
-      lines.push(`**Date ${i}:** ${(dateVal as string)?.substring(0, 10) || dateVal}`);
-    }
-    const boolVal = data[`StandardBooleanField${i}`];
-    if (boolVal != null) {
-      lines.push(`**Boolean ${i}:** ${boolVal}`);
+  for (const [label, pattern] of buckets) {
+    const matches = Object.entries(data)
+      .map(([k, v]) => {
+        const m = pattern.exec(k);
+        return m ? { idx: parseInt(m[1], 10), value: v } : null;
+      })
+      .filter((x): x is { idx: number; value: unknown } => x !== null && x.value != null && x.value !== "")
+      .sort((a, b) => a.idx - b.idx);
+
+    for (const { idx, value } of matches) {
+      if (label === "Date" && typeof value === "string" && value.includes("T")) {
+        lines.push(`**${label} ${idx}:** ${value.substring(0, 10)}`);
+      } else {
+        lines.push(`**${label} ${idx}:** ${String(value)}`);
+      }
     }
   }
 
@@ -136,13 +136,13 @@ export async function getXtraFields(args: z.infer<typeof getXtraFieldsSchema>): 
     return `Unknown Xtra entity type: ${args.entityType}`;
   }
 
-  const selectFields = `${parentKey},${xtraSelectFields()}`;
-  const filter = `${parentKey} eq ${args.parentId}`;
-
-  const result = await client.get<Record<string, unknown>>(
-    args.entityType,
-    `$filter=${filter}&$select=${selectFields}`
-  );
+  // Don't $select — the standard-field shape varies per Xtra entity (e.g.
+  // DivisionXtra has only StandardDecimalField1..5 and uses StandardFlagField,
+  // not StandardBooleanField). A hardcoded select 400s on those fields.
+  // Instead, ask for everything and let the formatter ignore unknown shapes.
+  const sp = new URLSearchParams();
+  sp.set("$filter", `${parentKey} eq ${args.parentId}`);
+  const result = await client.get<Record<string, unknown>>(args.entityType, sp.toString());
 
   if (result.value.length === 0) {
     return `No Xtra/custom field data found for ${args.entityType} with ${parentKey}=${args.parentId}.`;
