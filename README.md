@@ -14,33 +14,69 @@ Gives Claude the ability to:
 
 ## Install
 
-### Recommended (Claude plugin install — 1.2.0+)
+### Prerequisites
 
-1. In Claude Desktop, open **Customize → Personal plugins → +**.
-2. Add marketplace: paste `dale-ctrl/prospect-mcp`.
-3. Click **Install** on `prospect-crm`.
-4. Run the one-time credential setup.
+- **Claude Desktop** installed (Microsoft Store version is fine).
+- **Node.js 18 or newer** ([nodejs.org](https://nodejs.org/)).
+- **Claude Code CLI** installed: `npm install -g @anthropic-ai/claude-code`.
+- **Logged into Claude Code:** run `claude login` once and complete the browser flow.
 
-   **Windows (recommended):** from PowerShell, run the script straight off the NAS share:
+If any of these are missing, the setup script will detect them and tell you what to install.
 
-   ```powershell
-   \\192.168.1.155\sfm_data\prospect-mcp\scripts\setup-user.ps1
+### Recommended (Claude plugin install — 1.2.11+)
+
+1. Run the comprehensive setup script. **Use the `.cmd` launcher** — it bypasses Windows' default execution policy that would otherwise reject the unsigned `.ps1` (`UnauthorizedAccess: PSSecurityException`). From PowerShell or `cmd.exe`:
+
+   **Windows (recommended):**
+
+   ```
+   \\192.168.1.155\sfm_data\prospect-mcp\scripts\setup-user.cmd
    ```
 
-   It pre-flights Node + Claude Desktop, prompts for your CRM user code (e.g. `DL`, `ML`) and your `PROSPECT_PAT` (hidden input), and writes `%USERPROFILE%\.prospect-crm\config.json` with current-user-only ACLs. It also detects and warns about any leftover `prospect-crm` entry in `claude_desktop_config.json` (left over from v1.2.0); see [Migrating](#migrating-from-a-connector-based-install-v10x--v11x) below if you need to remove one.
+   This handles everything in one go: registers the plugin marketplace via Claude Code CLI, installs the plugin's local files, runs `npm install` for runtime dependencies, wires up the `prospect-crm` connector entry in `claude_desktop_config.json` (preserving any other `mcpServers` entries you have for Slack, Gmail, etc.), and captures your CRM user code + PAT to `%USERPROFILE%\.prospect-crm\config.json`. Idempotent — re-run any time your PAT changes or to apply plugin updates.
 
-   **Mac / Linux / cross-platform fallback:** Node-based equivalent — works anywhere Node 18+ is on PATH:
+   To refresh credentials only (skip the full install):
+
+   ```
+   \\192.168.1.155\sfm_data\prospect-mcp\scripts\setup-user.cmd -CredentialsOnly
+   ```
+
+   **Fallback if the `.cmd` won't run:** invoke the `.ps1` directly with an explicit execution-policy bypass. Same script, same arguments, the `.cmd` is just a wrapper:
+
+   ```powershell
+   powershell -NoProfile -ExecutionPolicy Bypass -File \\192.168.1.155\sfm_data\prospect-mcp\scripts\setup-user.ps1
+   ```
+
+   **Mac / Linux / cross-platform fallback:** the comprehensive Windows script doesn't have a Node equivalent yet. On non-Windows, run the install steps manually: `claude plugin marketplace add dale-ctrl/prospect-mcp`, `claude plugin install prospect-crm@wcg-prospect`, `cd ~/.claude/plugins/marketplaces/wcg-prospect && npm install --omit=dev`, then run the credential setup:
 
    ```bash
    curl -O https://raw.githubusercontent.com/dale-ctrl/prospect-mcp/main/scripts/setup.cjs
    node setup.cjs
    ```
 
-   Both scripts write the same `~/.prospect-crm/config.json` and prompt for the same fields (`PROSPECT_PAT`, `PROSPECT_BASE_URL`, `PROSPECT_USER_ID`). Run once per machine; future plugin updates pick the credentials up automatically. Re-run any time your PAT changes — the previous file is backed up with a timestamp suffix.
+   Wire up the connector entry in `~/Library/Application Support/Claude/claude_desktop_config.json` manually pointing `args` at `~/.claude/plugins/marketplaces/wcg-prospect/dist/index.js` (no `env` block — `loadCredentials()` reads from `~/.prospect-crm/config.json`).
 
-5. Restart Claude Desktop.
+2. **One last step in the Cowork UI** — the CLI install above handles the MCP server. Cowork's skill catalog is a separate registry that has to be set up via the UI:
+   1. In Claude Desktop, open **Customize → Personal plugins → +**.
+   2. Paste `dale-ctrl/prospect-mcp` and click **Sync**.
+   3. When `prospect-crm` appears, click **Install**.
+   4. Optionally toggle **Sync automatically** on the `wcg-prospect` marketplace so future skill updates land on Cowork restart.
 
-The MCP server runs from the plugin's bundled `dist/`, and the [`versa-maintenance-contracts-bulk`](skills/versa-maintenance-contracts-bulk/SKILL.md) skill auto-loads with the plugin — no copying into `~/.claude/skills/`.
+   Without this step, the prospect-crm MCP tools work but the bundled [`versa-maintenance-contracts-bulk`](skills/versa-maintenance-contracts-bulk/SKILL.md) skill won't auto-load.
+
+3. Fully quit Claude Desktop (right-click tray icon → Quit) and reopen.
+
+### Updates
+
+When a new version of the plugin is pushed to GitHub, run:
+
+```
+\\192.168.1.155\sfm_data\prospect-mcp\scripts\update-plugin.cmd
+```
+
+This calls `claude plugin update prospect-crm@wcg-prospect` and re-runs `npm install --omit=dev` (in case dependencies changed). Restart Claude Desktop to pick up the new version. If you toggled **Sync automatically** in the Cowork UI marketplace step above, skill updates land on restart without explicit action — `update-plugin.cmd` is only needed for the MCP server side.
+
+(Same `.cmd` / `.ps1` launcher pattern as setup. If the `.cmd` won't run, fall back to `powershell -NoProfile -ExecutionPolicy Bypass -File \\NAS\...\update-plugin.ps1`.)
 
 ### Optional — enable auto-updates
 

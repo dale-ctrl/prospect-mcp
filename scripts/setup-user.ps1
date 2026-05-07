@@ -1,40 +1,52 @@
 <#
 .SYNOPSIS
-One-time credential setup for the Prospect CRM Claude plugin (Windows).
+Comprehensive one-script install for the Prospect CRM Claude plugin (v1.2.11+).
 
 .DESCRIPTION
-PowerShell-native equivalent of scripts/setup.cjs. Run once per user
-machine after installing the prospect-crm plugin via the Claude Desktop
-marketplace. From PowerShell:
+Wraps the full team-rollout install in a single PowerShell run so a non-
+technical user can go from zero to working in one go. Handles:
 
-    \\192.168.1.155\sfm_data\prospect-mcp\scripts\setup-user.ps1
+  Pre-flight  Node.js 18+, Claude Desktop, Claude Code CLI, login state
+  Step 1      git insteadOf rule for HTTPS clone fallback
+  Step 2      Register the wcg-prospect marketplace via Claude Code CLI
+  Step 3      Install (or update) prospect-crm@wcg-prospect via CLI
+  Step 4      Locate the local plugin install at ~\.claude\plugins\...
+  Step 4b     npm install --omit=dev inside the plugin (CLI install does
+              not run this; the MCP server crashes without it)
+  Step 5      Wire up the prospect-crm entry in claude_desktop_config.json
+              pointing at the local dist\index.js (preserving any other
+              mcpServers entries the user has)
+  Step 6      Write credentials to %USERPROFILE%\.prospect-crm\config.json
+  Step 7      Print the manual Cowork-UI marketplace step the user must do
+  Step 8      Print restart + smoke-test instructions
 
-(or any other path you have the script at -- it does not need to live
-on the NAS, and nothing it writes references the NAS).
+Idempotent throughout -- re-running detects existing state and updates
+in place. No duplicate config entries, no broken JSON.
 
-Does the following, in order:
+.PARAMETER CredentialsOnly
+Skip the install plumbing (steps 1-5) and only refresh credentials
+(step 6) plus the Cowork UI reminder + restart instructions. Useful
+for PAT rotation without re-running the whole install.
 
-  1. Verifies Node.js 18+ is on PATH.
-  2. Verifies Claude Desktop is installed.
-  3. Prompts for the CRM user code (e.g. DL, ML, RL).
-  4. Prompts for the user's Prospect365 PAT (hidden input).
-  5. Writes %USERPROFILE%\.prospect-crm\config.json with current-user-only
-     ACLs. Backs up any existing file with a timestamp suffix.
-  6. Detects any leftover v1.2.0 prospect-crm entry in
-     claude_desktop_config.json and prints removal instructions -- the
-     plugin install carries the MCP itself in v1.2.1+, so a duplicate
-     entry will block plugin load.
+.PARAMETER UserCode
+Optional. Skip the user-code prompt by supplying it (e.g. "DL").
 
-Idempotent -- re-run any time the PAT changes; the previous config is
-backed up, never overwritten silently.
+.PARAMETER Pat
+Optional. Skip the PAT prompt by supplying it on the command line.
+Avoid in interactive use -- the hidden-input prompt is safer.
+
+.PARAMETER BaseUrl
+Optional override for PROSPECT_BASE_URL. Defaults to the regional
+write-capable host.
 
 .NOTES
-Does NOT touch claude_desktop_config.json. Does NOT touch the
-admin-portal permissions.json. Permissions remain a deliberate decision
-the admin makes in the portal.
+ASCII-only output for cmd.exe compatibility. Does NOT touch
+admin-portal permissions.json -- access grants stay a deliberate
+admin-portal decision, not a self-serve step.
 #>
 
 param(
+  [switch]$CredentialsOnly,
   [string]$UserCode,
   [string]$Pat,
   [string]$BaseUrl
@@ -70,10 +82,23 @@ function Write-Info {
   Write-Host "  $Text"
 }
 
-$DefaultBaseUrl = "https://api-v1-westeurope.prospect365.com"
+function Test-CommandExists {
+  param([string]$Name)
+  return $null -ne (Get-Command $Name -ErrorAction SilentlyContinue)
+}
 
-# -- Step 1: Node.js -------------------------------------------
-Write-Step "Checking Node.js"
+$DefaultBaseUrl = "https://api-v1-westeurope.prospect365.com"
+$PluginRoot     = Join-Path $env:USERPROFILE ".claude\plugins\marketplaces\wcg-prospect"
+$PluginEntry    = Join-Path $PluginRoot "dist\index.js"
+$CredDir        = Join-Path $env:USERPROFILE ".prospect-crm"
+$CredFile       = Join-Path $CredDir "config.json"
+$DesktopConfig  = Join-Path $env:APPDATA "Claude\claude_desktop_config.json"
+
+# =================================================================
+# Pre-flight: Node.js
+# =================================================================
+Write-Step "Pre-flight: Node.js"
+$nodePath = $null
 try {
   $nodeVersion = (& node --version 2>&1).Trim()
   if ($nodeVersion -match "^v(\d+)\.") {
@@ -82,7 +107,9 @@ try {
       Write-Fail "Node.js $nodeVersion is too old. Need v18 or newer."
       Write-Info "Download from https://nodejs.org/ (LTS is fine)."
     } else {
-      Write-Ok "Node.js $nodeVersion"
+      $cmd = Get-Command node -ErrorAction SilentlyContinue
+      if ($cmd) { $nodePath = $cmd.Source }
+      Write-Ok "Node.js $nodeVersion ($nodePath)"
     }
   } else {
     Write-Fail "Node.js reports an unexpected version: $nodeVersion"
@@ -92,20 +119,16 @@ try {
   Write-Info "Install from https://nodejs.org/ then re-run this script."
 }
 
-# -- Step 2: Claude Desktop ------------------------------------
-# Detection order, most specific first. Wildcards are expanded by Get-Item,
-# which is wrapped in try/catch so an ACL-locked WindowsApps directory or a
-# non-matching pattern doesn't abort the whole probe.
-Write-Step "Checking Claude Desktop"
+# =================================================================
+# Pre-flight: Claude Desktop (with MS Store wildcard from v1.2.2)
+# =================================================================
+Write-Step "Pre-flight: Claude Desktop"
 $claudePathPatterns = @(
   "$env:LOCALAPPDATA\Programs\claude\Claude.exe",
   "$env:LOCALAPPDATA\Programs\Claude\Claude.exe",
   "$env:LOCALAPPDATA\Claude\Claude.exe",
   "$env:ProgramFiles\Claude\Claude.exe",
-  # Microsoft Store install: version- and per-machine-specific path,
-  # e.g. C:\Program Files\WindowsApps\Claude_1.6259.1.0_x64__pzs8sxrjxfjjc\app\Claude.exe
   "$env:ProgramFiles\WindowsApps\Claude_*\app\Claude.exe",
-  # Store alias shim, if Microsoft maintains one in the user's WindowsApps.
   "$env:LOCALAPPDATA\Microsoft\WindowsApps\Claude.exe"
 )
 
@@ -113,36 +136,72 @@ $claudeExe = $null
 foreach ($pattern in $claudePathPatterns) {
   try {
     $match = Get-Item -Path $pattern -ErrorAction Stop | Select-Object -First 1
-    if ($match) {
-      $claudeExe = $match.FullName
-      break
-    }
+    if ($match) { $claudeExe = $match.FullName; break }
   } catch {
-    # No match, or the parent directory is ACL-locked. Try the next pattern.
+    # No match or ACL-locked. Try next.
   }
 }
 
-# Secondary signal: %APPDATA%\Claude\ is created on first launch regardless
-# of how Claude Desktop was installed (exe installer, MSIX, Microsoft Store).
-# It's the most reliable "Claude has been installed and run at least once" check.
-$claudeAppData = Join-Path $env:APPDATA "Claude"
+$claudeAppData       = Join-Path $env:APPDATA "Claude"
 $claudeAppDataExists = Test-Path $claudeAppData
 
 if ($claudeExe) {
   Write-Ok "Claude Desktop at $claudeExe"
-  if (-not $claudeAppDataExists) {
-    Write-Info "($claudeAppData not present yet -- it's created on first launch.)"
-  }
 } elseif ($claudeAppDataExists) {
-  # Probably a Store install on a machine where WindowsApps is ACL-locked
-  # or the install path moved. Don't block setup -- the AppData dir is
-  # proof-of-install, and we don't actually need the launcher path here.
   Write-Ok "Claude Desktop appears installed ($claudeAppData exists)"
-  Write-Warn "Could not confirm the launcher path. Common cause: Microsoft Store"
-  Write-Warn "install with restricted ACLs on WindowsApps. Continuing anyway."
+  Write-Warn "Could not confirm a launcher path -- common cause: Microsoft"
+  Write-Warn "Store install with restricted ACLs on WindowsApps. Continuing."
 } else {
   Write-Fail "Claude Desktop not found in the usual install locations."
   Write-Info "Install from https://claude.ai/download then re-run this script."
+}
+
+# =================================================================
+# Pre-flight: Claude Code CLI + login state (full mode only)
+# =================================================================
+if (-not $CredentialsOnly) {
+  Write-Step "Pre-flight: Claude Code CLI"
+  if (Test-CommandExists "claude") {
+    try {
+      $cliVersion = (& claude --version 2>&1).Trim()
+      Write-Ok "Claude Code CLI present: $cliVersion"
+    } catch {
+      Write-Fail "Claude Code CLI exists but 'claude --version' failed."
+      Write-Info "Reinstall: npm install -g @anthropic-ai/claude-code"
+    }
+  } else {
+    Write-Warn "Claude Code CLI not found on PATH. Attempting auto-install..."
+    try {
+      & npm install -g "@anthropic-ai/claude-code" 2>&1 | Out-Null
+      if ($LASTEXITCODE -ne 0) { throw "npm install exit $LASTEXITCODE" }
+    } catch {
+      Write-Fail "Auto-install of Claude Code CLI failed."
+      Write-Info "Install manually: npm install -g @anthropic-ai/claude-code"
+      Write-Info "Or download instructions: https://docs.claude.com/en/docs/claude-code/setup"
+    }
+    if (-not (Test-CommandExists "claude")) {
+      Write-Fail "'claude' still not on PATH after install attempt."
+      Write-Info "Open a fresh PowerShell and re-run this script -- npm-installed"
+      Write-Info "globals sometimes need a new shell to land on PATH."
+    } else {
+      $cliVersion = (& claude --version 2>&1).Trim()
+      Write-Ok "Claude Code CLI installed: $cliVersion"
+    }
+  }
+
+  # Login state probe
+  if ($script:FailCount -eq 0) {
+    Write-Step "Pre-flight: Claude Code CLI login state"
+    $listOut = & claude plugin list 2>&1
+    $listExit = $LASTEXITCODE
+    if ($listExit -ne 0 -and $listOut -match "(?i)auth|login|unauthori[sz]ed|token") {
+      Write-Fail "Claude Code CLI is not logged in."
+      Write-Info "Open a separate PowerShell window and run: claude login"
+      Write-Info "Complete the browser login flow, then re-run this script."
+    } else {
+      Write-Ok "Claude Code CLI session usable"
+    }
+  }
 }
 
 if ($script:FailCount -gt 0) {
@@ -151,10 +210,174 @@ if ($script:FailCount -gt 0) {
   exit 1
 }
 
-# -- Step 3: Collect user inputs -------------------------------
-Write-Step "User details"
+# Resolve Node path for the connector entry. Falls back to "node".
+$nodeArg = if ($nodePath) { $nodePath } else { "node" }
+
+# =================================================================
+# Steps 1-5 (full install) -- skipped in CredentialsOnly mode
+# =================================================================
+if (-not $CredentialsOnly) {
+
+  # ---- Step 1: git insteadOf rule -----------------------------
+  Write-Step "Step 1: git insteadOf rule"
+  $existing = & git config --global --get "url.https://github.com/.insteadOf" 2>$null
+  if ($existing -and $existing.Trim() -eq "git@github.com:") {
+    Write-Ok "git insteadOf rule already in place"
+  } else {
+    & git config --global url."https://github.com/".insteadOf git@github.com: | Out-Null
+    Write-Ok "Set git insteadOf rule (HTTPS fallback for clones)"
+  }
+
+  # ---- Step 2: register marketplace ---------------------------
+  Write-Step "Step 2: register wcg-prospect marketplace"
+  $marketplaceList = & claude plugin marketplace list 2>&1 | Out-String
+  if ($marketplaceList -match "wcg-prospect") {
+    Write-Ok "Marketplace 'wcg-prospect' already registered"
+  } else {
+    & claude plugin marketplace add dale-ctrl/prospect-mcp
+    if ($LASTEXITCODE -ne 0) {
+      Write-Fail "claude plugin marketplace add failed (exit $LASTEXITCODE)."
+      Write-Info "Run manually: claude plugin marketplace add dale-ctrl/prospect-mcp"
+      exit 1
+    }
+    Write-Ok "Added marketplace 'wcg-prospect'"
+  }
+
+  # ---- Step 3: install or update plugin -----------------------
+  Write-Step "Step 3: install or update plugin"
+  $installed = & claude plugin list 2>&1 | Out-String
+  if ($installed -match "prospect-crm@wcg-prospect") {
+    & claude plugin update prospect-crm@wcg-prospect
+    if ($LASTEXITCODE -ne 0) {
+      Write-Fail "claude plugin update failed (exit $LASTEXITCODE)."
+      exit 1
+    }
+    Write-Ok "Updated existing plugin to latest version"
+  } else {
+    & claude plugin install prospect-crm@wcg-prospect
+    if ($LASTEXITCODE -ne 0) {
+      Write-Fail "claude plugin install failed (exit $LASTEXITCODE)."
+      Write-Info "Run manually: claude plugin install prospect-crm@wcg-prospect"
+      exit 1
+    }
+    Write-Ok "Installed plugin"
+  }
+
+  # ---- Step 4: locate local plugin install --------------------
+  Write-Step "Step 4: locate local plugin install"
+  if (-not (Test-Path $PluginEntry)) {
+    Write-Fail "Plugin entry not found at: $PluginEntry"
+    Write-Info "The CLI install did not clone what we expected. Check:"
+    Write-Info "  claude plugin list"
+    Write-Info "  ls $PluginRoot"
+    exit 1
+  }
+  Write-Ok "Plugin entry found at $PluginEntry"
+
+  # ---- Step 4b: npm install runtime deps ----------------------
+  Write-Step "Step 4b: install plugin runtime dependencies (30-60s)"
+  Push-Location $PluginRoot
+  try {
+    & npm install --omit=dev --silent 2>&1 | Out-Null
+    if ($LASTEXITCODE -ne 0) {
+      Write-Fail "npm install failed in $PluginRoot (exit $LASTEXITCODE)."
+      Write-Info "Run manually to see errors:"
+      Write-Info "  cd $PluginRoot"
+      Write-Info "  npm install --omit=dev"
+      exit 1
+    }
+    Write-Ok "Runtime dependencies installed"
+  } finally {
+    Pop-Location
+  }
+
+  # ---- Step 5: connector entry --------------------------------
+  Write-Step "Step 5: wire up Claude Desktop connector"
+  $configDir = Split-Path -Parent $DesktopConfig
+  if (-not (Test-Path $configDir)) {
+    New-Item -ItemType Directory -Force -Path $configDir | Out-Null
+    Write-Info "Created $configDir"
+  }
+
+  $config = $null
+  if (Test-Path $DesktopConfig) {
+    $stamp  = Get-Date -Format "yyyyMMdd-HHmmss"
+    $backup = "$DesktopConfig.backup-$stamp"
+    Copy-Item $DesktopConfig $backup
+    Write-Ok "Existing config backed up to $backup"
+
+    try {
+      $raw = Get-Content $DesktopConfig -Raw -Encoding UTF8
+      if ($raw.Trim() -eq "") {
+        $config = [ordered]@{ mcpServers = [ordered]@{} }
+      } else {
+        $config = $raw | ConvertFrom-Json
+      }
+    } catch {
+      Write-Fail "Could not parse existing config as JSON: $($_.Exception.Message)"
+      Write-Info "Original is backed up. Fix or delete $DesktopConfig and re-run."
+      exit 1
+    }
+  } else {
+    $config = [ordered]@{ mcpServers = [ordered]@{} }
+  }
+
+  # Normalise -- older configs may lack mcpServers
+  if (-not ($config.PSObject.Properties.Name -contains "mcpServers")) {
+    $config | Add-Member -NotePropertyName mcpServers -NotePropertyValue ([ordered]@{}) -Force
+  }
+
+  $prospectEntry = [ordered]@{
+    command = $nodeArg
+    args    = @($PluginEntry)
+  }
+
+  if ($config.mcpServers.PSObject.Properties.Name -contains "prospect-crm") {
+    $config.mcpServers."prospect-crm" = $prospectEntry
+    Write-Ok "Updated existing 'prospect-crm' connector entry"
+  } else {
+    $config.mcpServers | Add-Member -NotePropertyName "prospect-crm" -NotePropertyValue $prospectEntry -Force
+    Write-Ok "Added 'prospect-crm' connector entry"
+  }
+
+  # Preserve every other mcpServers entry untouched -- only prospect-crm is rewritten.
+  $otherCount = ($config.mcpServers.PSObject.Properties.Name | Where-Object { $_ -ne "prospect-crm" }).Count
+  if ($otherCount -gt 0) {
+    Write-Info "Preserved $otherCount other mcpServers entry/entries untouched"
+  }
+
+  $json = $config | ConvertTo-Json -Depth 10
+  [System.IO.File]::WriteAllText($DesktopConfig, $json, [System.Text.UTF8Encoding]::new($false))
+  Write-Ok "Wrote $DesktopConfig"
+  Write-Info "Connector args: $PluginEntry"
+}
+
+# =================================================================
+# Step 6: credentials (always)
+# =================================================================
+Write-Step "Step 6: credentials"
+
+# Read existing config, if any, so we can default the user code prompt
+# and preserve unknown fields the user may have added manually.
+$existingCred = $null
+if (Test-Path $CredFile) {
+  try {
+    $existingCred = Get-Content $CredFile -Raw -Encoding UTF8 | ConvertFrom-Json
+  } catch {
+    Write-Warn "Existing $CredFile is unparseable -- it will be replaced."
+    $existingCred = $null
+  }
+}
+
 if (-not $UserCode) {
-  $UserCode = Read-Host "Your CRM user code (e.g. DL, ML, RL)"
+  $defaultUserCode = ""
+  if ($existingCred -and $existingCred.PROSPECT_USER_ID) {
+    $defaultUserCode = $existingCred.PROSPECT_USER_ID
+    $UserCode = Read-Host "Your CRM user code [$defaultUserCode]"
+    if ([string]::IsNullOrWhiteSpace($UserCode)) { $UserCode = $defaultUserCode }
+  } else {
+    $UserCode = Read-Host "Your CRM user code (e.g. DL, ML, RL)"
+  }
 }
 $UserCode = $UserCode.Trim().ToUpper()
 if ($UserCode -eq "") {
@@ -163,7 +386,6 @@ if ($UserCode -eq "") {
 }
 Write-Ok "User code: $UserCode"
 
-# -- Step 4: PAT -----------------------------------------------
 if (-not $Pat) {
   Write-Info "To generate your PAT:"
   Write-Info "  1. Log in to Prospect365 in a browser."
@@ -176,103 +398,109 @@ if (-not $Pat) {
 }
 $Pat = $Pat.Trim()
 if ($Pat.Length -lt 20) {
-  Write-Fail "PAT looks too short -- should be a long hex-ish string. Got $($Pat.Length) chars."
+  Write-Fail "PAT looks too short -- expected a long hex-ish string. Got $($Pat.Length) chars."
   exit 1
 }
 Write-Ok "PAT captured ($($Pat.Length) characters)"
 
-# -- Step 5: Optional base URL override ------------------------
 if (-not $BaseUrl) {
-  $BaseUrl = $DefaultBaseUrl
+  if ($existingCred -and $existingCred.PROSPECT_BASE_URL) {
+    $BaseUrl = $existingCred.PROSPECT_BASE_URL
+  } else {
+    $BaseUrl = $DefaultBaseUrl
+  }
 }
 Write-Ok "Base URL: $BaseUrl"
 
-# -- Step 6: Write user-local credential file ------------------
-Write-Step "Writing credential config"
-$credDir  = Join-Path $env:USERPROFILE ".prospect-crm"
-$credFile = Join-Path $credDir "config.json"
-
-if (-not (Test-Path $credDir)) {
-  New-Item -ItemType Directory -Force -Path $credDir | Out-Null
-  Write-Info "Created $credDir"
+if (-not (Test-Path $CredDir)) {
+  New-Item -ItemType Directory -Force -Path $CredDir | Out-Null
+  Write-Info "Created $CredDir"
 }
 
-if (Test-Path $credFile) {
+if (Test-Path $CredFile) {
   $stamp  = Get-Date -Format "yyyyMMdd-HHmmss"
-  $backup = "$credFile.backup-$stamp"
-  Copy-Item $credFile $backup
+  $backup = "$CredFile.backup-$stamp"
+  Copy-Item $CredFile $backup
   Write-Ok "Existing credentials backed up to $backup"
 }
 
-$cred = [ordered]@{
-  PROSPECT_PAT      = $Pat
-  PROSPECT_BASE_URL = $BaseUrl
-  PROSPECT_USER_ID  = $UserCode
+# Build the new config, preserving any extra fields the user may have added
+# (loadCredentials only reads the known keys, but we don't want to silently
+# drop e.g. PROSPECT_PROFILE_ID or PROSPECT_LOCALE if the user set them).
+$cred = [ordered]@{}
+if ($existingCred) {
+  foreach ($prop in $existingCred.PSObject.Properties) {
+    $cred[$prop.Name] = $prop.Value
+  }
 }
+$cred["PROSPECT_PAT"]      = $Pat
+$cred["PROSPECT_BASE_URL"] = $BaseUrl
+$cred["PROSPECT_USER_ID"]  = $UserCode
 
 $json = $cred | ConvertTo-Json -Depth 5
-[System.IO.File]::WriteAllText($credFile, $json, [System.Text.UTF8Encoding]::new($false))
-Write-Ok "Wrote $credFile"
+[System.IO.File]::WriteAllText($CredFile, $json, [System.Text.UTF8Encoding]::new($false))
+Write-Ok "Wrote $CredFile"
 
-# Lock to current user only -- belt-and-braces, the parent dir already
-# defaults to the user's profile ACL, but be explicit about the file.
 try {
-  & icacls $credFile /inheritance:r /grant:r "$($env:USERNAME):(R,W)" | Out-Null
+  & icacls $CredFile /inheritance:r /grant:r "$($env:USERNAME):(R,W)" | Out-Null
   Write-Ok "Permissions restricted to $env:USERNAME"
 } catch {
-  Write-Warn "Could not tighten ACLs on $credFile -- file is still readable only inside your user profile."
+  Write-Warn "Could not tighten ACLs on $CredFile -- file is still inside your user profile."
 }
 
-# -- Step 7: Detect leftover v1.2.0 connector entry ------------
-Write-Step "Checking for stale connector entry"
-$desktopConfig = Join-Path $env:APPDATA "Claude\claude_desktop_config.json"
-if (Test-Path $desktopConfig) {
-  try {
-    $raw = Get-Content $desktopConfig -Raw -Encoding UTF8
-    if ($raw.Trim() -ne "") {
-      $parsed = $raw | ConvertFrom-Json
-      if ($parsed.PSObject.Properties.Name -contains "mcpServers" -and
-          $parsed.mcpServers -and
-          ($parsed.mcpServers.PSObject.Properties.Name -contains "prospect-crm")) {
-        Write-Warn "Found a 'prospect-crm' entry in $desktopConfig"
-        Write-Info "v1.2.1+ ships the MCP inside the plugin install, so this entry is no"
-        Write-Info "longer needed and will block the plugin's MCP from loading (duplicate"
-        Write-Info "server name). Open the file in a text editor, delete the 'prospect-crm'"
-        Write-Info "entry from the 'mcpServers' object, save, and restart Claude Desktop."
-      } else {
-        Write-Ok "No stale 'prospect-crm' entry in $desktopConfig"
-      }
-    } else {
-      Write-Ok "claude_desktop_config.json is empty -- nothing to clean up"
-    }
-  } catch {
-    Write-Warn "Could not parse $desktopConfig as JSON -- check it manually for a stale 'prospect-crm' entry."
-  }
+# =================================================================
+# Step 7: Cowork-UI marketplace add (manual reminder)
+# =================================================================
+Write-Step "Step 7: One last manual step in Cowork"
+Write-Info "The CLI install above handled the MCP server. Cowork's skill catalog"
+Write-Info "is a separate registry that has to be set up via the UI. Do this once:"
+Write-Info ""
+Write-Info "  1. In Claude Desktop, open Customize -> Personal plugins -> +"
+Write-Info "  2. In the 'Add marketplace' dialog, paste:"
+Write-Info "       dale-ctrl/prospect-mcp"
+Write-Info "  3. Click Sync."
+Write-Info "  4. When the prospect-crm plugin appears, click Install on it."
+Write-Info "  5. (Optional but recommended) In the same Customize area, find the"
+Write-Info "     wcg-prospect marketplace and toggle 'Sync automatically' so future"
+Write-Info "     skill updates land on Cowork restart without manual refresh."
+Write-Info ""
+Write-Info "Without this step, the prospect-crm MCP tools work but the"
+Write-Info "versa-maintenance-contracts-bulk skill (and any future skills shipped"
+Write-Info "with this plugin) will not auto-load when you ask Claude to do Versa"
+Write-Info "Maintenance Contract work."
+
+# =================================================================
+# Step 8: restart + smoke test
+# =================================================================
+Write-Host ""
+Write-Host "=================================================================" -ForegroundColor Green
+if ($CredentialsOnly) {
+  Write-Host "  Credentials refreshed for user $UserCode" -ForegroundColor Green
 } else {
-  Write-Ok "No claude_desktop_config.json present -- nothing to clean up"
+  Write-Host "  Setup complete for user $UserCode on this machine" -ForegroundColor Green
 }
-
-# -- Step 8: Done ----------------------------------------------
-Write-Host ""
-Write-Host "=================================================================" -ForegroundColor Green
-Write-Host "  Setup complete for user $UserCode on this machine" -ForegroundColor Green
 Write-Host "=================================================================" -ForegroundColor Green
 Write-Host ""
-Write-Host "Next steps (admin to-do, on your own machine):"
-Write-Host "  1. Open the Admin Portal:"
-Write-Host "       http://localhost:3333" -ForegroundColor Yellow
-Write-Host "  2. Click + Add User, set code to $UserCode, fill in name/notes,"
-Write-Host "     tick the permission toggles that match their role, hit Save."
-Write-Host "     Changes go live within 5 seconds; no Claude restart needed."
-Write-Host ""
-Write-Host "Next steps (this machine):"
-Write-Host "  1. If the warning above flagged a stale 'prospect-crm' entry in"
-Write-Host "     claude_desktop_config.json, remove it before restarting."
-Write-Host "  2. Fully quit Claude Desktop (right-click tray icon, Quit)."
+Write-Host "Final steps:"
+Write-Host "  1. Do the Cowork UI marketplace add described in Step 7 above."
+Write-Host "     (Skip if you've already done it on this machine.)"
+Write-Host "  2. Fully quit Claude Desktop (right-click tray icon -> Quit)."
 Write-Host "     Closing the window is not enough."
 Write-Host "  3. Reopen Claude Desktop from the Start menu."
-Write-Host "  4. In a new chat, ask: 'search quotes for Exeter University' to"
-Write-Host "     confirm the connector loaded."
+Write-Host "  4. In a fresh chat, run two smoke tests:"
+Write-Host "       a. 'Look up Beacon Academy in Prospect'"
+Write-Host "          -- confirms the prospect-crm MCP tools respond."
+Write-Host "       b. 'Create a Versa Maintenance Contract for [some site]"
+Write-Host "          - 9x mobile tables'"
+Write-Host "          -- confirms the skill is loaded (Claude should reference"
+Write-Host "          the WCG rate card without you pasting it)."
 Write-Host ""
-Write-Host "Credentials written to: $credFile"
+Write-Host "Re-run this script any time your PAT changes, or use:"
+Write-Host "  scripts\setup-user.ps1 -CredentialsOnly"
+Write-Host "to refresh credentials without re-running the full install."
+Write-Host ""
+if (-not $CredentialsOnly) {
+  Write-Host "Connector args: $PluginEntry"
+}
+Write-Host "Credentials:    $CredFile"
 Write-Host ""
