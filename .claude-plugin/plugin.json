@@ -1,6 +1,6 @@
 {
   "name": "prospect-crm",
-  "version": "1.2.1",
+  "version": "1.2.2",
   "description": "Westcountry Group's Prospect CRM (prospect365.com) MCP connector with bundled workflow skills (Versa Maintenance Contracts, plus others as they are added). Wraps the Prospect OData v1 API for quote, contact, division, and document operations against the WCG tenant.",
   "author": {
     "name": "Westcountry Group",

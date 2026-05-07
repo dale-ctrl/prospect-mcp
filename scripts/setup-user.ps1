@@ -93,17 +93,53 @@ try {
 }
 
 # -- Step 2: Claude Desktop ------------------------------------
+# Detection order, most specific first. Wildcards are expanded by Get-Item,
+# which is wrapped in try/catch so an ACL-locked WindowsApps directory or a
+# non-matching pattern doesn't abort the whole probe.
 Write-Step "Checking Claude Desktop"
-$claudePaths = @(
+$claudePathPatterns = @(
   "$env:LOCALAPPDATA\Programs\claude\Claude.exe",
   "$env:LOCALAPPDATA\Programs\Claude\Claude.exe",
   "$env:LOCALAPPDATA\Claude\Claude.exe",
-  "$env:ProgramFiles\Claude\Claude.exe"
+  "$env:ProgramFiles\Claude\Claude.exe",
+  # Microsoft Store install: version- and per-machine-specific path,
+  # e.g. C:\Program Files\WindowsApps\Claude_1.6259.1.0_x64__pzs8sxrjxfjjc\app\Claude.exe
+  "$env:ProgramFiles\WindowsApps\Claude_*\app\Claude.exe",
+  # Store alias shim, if Microsoft maintains one in the user's WindowsApps.
+  "$env:LOCALAPPDATA\Microsoft\WindowsApps\Claude.exe"
 )
-$claudeFound = $claudePaths | Where-Object { Test-Path $_ } | Select-Object -First 1
 
-if ($claudeFound) {
-  Write-Ok "Claude Desktop at $claudeFound"
+$claudeExe = $null
+foreach ($pattern in $claudePathPatterns) {
+  try {
+    $match = Get-Item -Path $pattern -ErrorAction Stop | Select-Object -First 1
+    if ($match) {
+      $claudeExe = $match.FullName
+      break
+    }
+  } catch {
+    # No match, or the parent directory is ACL-locked. Try the next pattern.
+  }
+}
+
+# Secondary signal: %APPDATA%\Claude\ is created on first launch regardless
+# of how Claude Desktop was installed (exe installer, MSIX, Microsoft Store).
+# It's the most reliable "Claude has been installed and run at least once" check.
+$claudeAppData = Join-Path $env:APPDATA "Claude"
+$claudeAppDataExists = Test-Path $claudeAppData
+
+if ($claudeExe) {
+  Write-Ok "Claude Desktop at $claudeExe"
+  if (-not $claudeAppDataExists) {
+    Write-Info "($claudeAppData not present yet -- it's created on first launch.)"
+  }
+} elseif ($claudeAppDataExists) {
+  # Probably a Store install on a machine where WindowsApps is ACL-locked
+  # or the install path moved. Don't block setup -- the AppData dir is
+  # proof-of-install, and we don't actually need the launcher path here.
+  Write-Ok "Claude Desktop appears installed ($claudeAppData exists)"
+  Write-Warn "Could not confirm the launcher path. Common cause: Microsoft Store"
+  Write-Warn "install with restricted ACLs on WindowsApps. Continuing anyway."
 } else {
   Write-Fail "Claude Desktop not found in the usual install locations."
   Write-Info "Install from https://claude.ai/download then re-run this script."
