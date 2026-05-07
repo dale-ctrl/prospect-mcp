@@ -86,9 +86,11 @@ explaining maintenance pricing to the user.
 
 ### Customer-specific overrides
 
-Customers can negotiate non-standard rates. Always confirm the per-unit rate
-and minimum-charge treatment with the user before pricing — do not silently
-apply standard rates.
+If the user mentions an umbrella contract, a discount, a multi-site deal, or
+any non-standard pricing context, confirm the per-unit rate and
+minimum-charge treatment with the user before pricing. Otherwise, apply the
+WCG standard rate card automatically without asking — the user can override
+mid-workflow if needed.
 
 **Worked example — Wellspring Academy Trust (May 2026):**
 
