@@ -12,68 +12,91 @@ Gives Claude the ability to:
 - **Search contacts, companies, and products** in the CRM catalogue
 - **Email a quote** to its primary contact using the tenant's default email template, and download the rendered PDF (opt-in, see **Quote Messaging** below)
 
-## Setup (first time)
+## Install
 
-### 1. Install dependencies
+### Recommended — plugin install (1.1.0+)
 
-Open a terminal in this folder (or via mapped drive) and run:
+This repo is a Claude Code plugin. From inside Claude Code or Claude Desktop:
 
-```
-npm install
-```
+1. Add the marketplace and install the plugin:
 
-### 2. Build
+   ```
+   /plugin marketplace add dale-ctrl/prospect-mcp
+   ```
 
-```
-npm run build
-```
+2. Install the plugin from that marketplace:
 
-This compiles TypeScript into the `dist/` folder.
+   ```
+   /plugin install prospect-crm@wcg-prospect
+   ```
 
-### 3. Get your Prospect PAT token
+   The MCP server runs from the plugin's bundled `dist/`, and the [`versa-maintenance-contracts-bulk`](skills/versa-maintenance-contracts-bulk/SKILL.md) skill auto-loads with the plugin — no copying into `~/.claude/skills/`.
 
-In ProspectCRM: **Settings > Integrations > API > Personal Access Tokens**
+3. **Enable auto-updates** so future versions land on app restart without manual update commands. Download and run the helper script:
 
-Generate a new token. Keep it safe — treat it like a password.
+   **Windows (PowerShell):**
 
-### 4. Test API connectivity
+   ```powershell
+   Invoke-WebRequest https://raw.githubusercontent.com/dale-ctrl/prospect-mcp/main/scripts/enable-autoupdate.cjs -OutFile enable-autoupdate.cjs
+   node enable-autoupdate.cjs
+   ```
+
+   **Mac/Linux:**
+
+   ```bash
+   curl -O https://raw.githubusercontent.com/dale-ctrl/prospect-mcp/main/scripts/enable-autoupdate.cjs
+   node enable-autoupdate.cjs
+   ```
+
+   Restart Claude Desktop after running. From then on, every restart pulls the latest plugin version automatically — no `/plugin update` commands needed.
+
+   The script just sets `autoUpdate: true` on the `wcg-prospect` entry in `~/.claude/plugins/known_marketplaces.json`. Anthropic has an [open feature request](https://github.com/anthropics/claude-code/issues/10265) for a built-in CLI/UI alternative, so this script may become unnecessary in a future Claude Desktop release.
+
+You still need to set the `PROSPECT_PAT` (and optionally `PROSPECT_PROFILE_ID`) environment variable in your Claude Code/Desktop env. See [Required environment](#required-environment) below.
+
+### Migrating from a 1.0.x `mcpServers` install
+
+If you previously added a `prospect-crm` block to your `claude_desktop_config.json` under `mcpServers`, **remove it before installing the plugin**. Claude Desktop treats two MCP servers with the same name as a duplicate and the plugin's server won't load. After removing the old block, restart Claude Desktop, then run the install steps above.
+
+### Legacy / fallback — raw `mcpServers` entry
+
+For Claude Desktop versions that don't yet support `/plugin` commands, the original install path still works. You miss skill auto-loading (you have to copy [`skills/versa-maintenance-contracts-bulk/`](skills/versa-maintenance-contracts-bulk/) into `%USERPROFILE%\.claude\skills\` or `~/.claude/skills/` yourself), but the MCP tools function identically.
+
+1. Clone or sync this repo locally (e.g. on the NAS share).
+2. `npm install && npm run build`.
+3. Generate a Prospect PAT in ProspectCRM: **Settings > Integrations > API > Personal Access Tokens**. Keep it safe — treat it like a password.
+4. Edit your `claude_desktop_config.json`:
+   - **Windows:** `%APPDATA%\Claude\claude_desktop_config.json`
+   - **Mac:** `~/Library/Application Support/Claude/claude_desktop_config.json`
+
+   Add to `mcpServers`:
+
+   ```json
+   {
+     "mcpServers": {
+       "prospect-crm": {
+         "command": "node",
+         "args": ["\\\\SYNOLOGY-NAS\\IT\\prospect-mcp\\dist\\index.js"],
+         "env": {
+           "PROSPECT_PAT": "your_personal_access_token",
+           "PROSPECT_BASE_URL": "https://api-v1-westeurope.prospect365.com"
+         }
+       }
+     }
+   }
+   ```
+
+   Replace the UNC path with the actual location of this repo on your NAS. If Node isn't on PATH, use the full path to `node.exe` (`where node`).
+5. Restart Claude Desktop.
+
+### First-time API smoke test (any install path)
 
 ```
 set PROSPECT_PAT=your_token_here
 npm run test:api
 ```
 
-You should see quote statuses, recent quotes, and a product count. If you get a 401, your token is wrong or expired.
-
-### 5. Configure Claude Desktop
-
-Edit your `claude_desktop_config.json`:
-
-- **Windows:** `%APPDATA%\Claude\claude_desktop_config.json`
-- **Mac:** `~/Library/Application Support/Claude/claude_desktop_config.json`
-
-Add this to the `mcpServers` section:
-
-```json
-{
-  "mcpServers": {
-    "prospect-crm": {
-      "command": "node",
-      "args": ["\\\\SYNOLOGY-NAS\\IT\\prospect-mcp\\dist\\index.js"],
-      "env": {
-        "PROSPECT_PAT": "your_personal_access_token",
-        "PROSPECT_BASE_URL": "https://crm-odata-v1.prospect365.com"
-      }
-    }
-  }
-}
-```
-
-> **Note:** Replace `\\\\SYNOLOGY-NAS\\IT\\prospect-mcp` with the actual UNC path to this folder on the NAS. If Node isn't on your system PATH, use the full path to `node.exe` (run `where node` to find it).
-
-### 6. Restart Claude Desktop
-
-Close and reopen Claude Desktop. The ProspectCRM tools should appear in your connector/tools list.
+You should see quote statuses, recent quotes, and a product count. 401 = token wrong or expired.
 
 ## Usage examples
 
@@ -86,6 +109,14 @@ In any Claude chat with the connector enabled, try:
 - *"Update the delivery postcode on quote 12345 to EX1 2AB"*
 - *"Find product code WB-PANEL in the catalogue"*
 - *"Search for contacts at Plymouth Council"*
+
+## Bundled skills
+
+Skills under `skills/` capture multi-step workflows on top of the connector's tools. **On the plugin install path they auto-load** — no manual copy required. On the legacy `mcpServers` install path, copy each `skills/<skill-name>/` folder into `%USERPROFILE%\.claude\skills\` (Windows) or `~/.claude/skills/` (Mac/Linux).
+
+Currently shipped:
+
+- [`versa-maintenance-contracts-bulk`](skills/versa-maintenance-contracts-bulk/SKILL.md) — produces single or bulk Versa Maintenance Contracts (docx + PDF) by client-side merging from a Wimbledon-style template, bypassing Prospect's `MergeData` ContactNotSet error.
 
 ## Quote Messaging (send PDF by email)
 
@@ -179,5 +210,8 @@ prospect-mcp/
 │   │   └── lookups.ts         # Contact, product, division search
 │   └── types/
 │       └── prospect.ts    # TypeScript interfaces from OData metadata
+├── skills/                # Bundled workflow skills — copy into ~/.claude/skills/ to use
+│   └── versa-maintenance-contracts-bulk/
+│       └── SKILL.md
 └── dist/                  # Compiled JS (after npm run build)
 ```

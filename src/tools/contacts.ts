@@ -6,6 +6,7 @@
 
 import { z } from "zod";
 import { getClient } from "../client.js";
+import { resolveDropdownValue } from "./dropdowns.js";
 
 // ─── Schemas ───────────────────────────────────────────────────
 
@@ -15,8 +16,64 @@ export const createDivisionSchema = z.object({
   website: z.string().optional().describe("Company website URL"),
   relationship: z.string().optional().describe("Relationship type, e.g. 'Customer', 'Prospect', 'Supplier'"),
   salesLedgerId: z.string().optional().describe("Account code in the sales ledger"),
-  territoryCode: z.string().optional().describe("Territory code"),
-  customerType: z.string().optional().describe("Customer type code"),
+  territoryCode: z.string().optional().describe(
+    "AREA LOCATION — patches Division.TerritoryCode. Accepts FK code " +
+    "(e.g. 'WGAREA137e6eff02e14d98942fe6b8baf5af77') or UI label (e.g. 'WG AREA')."
+  ),
+  accountManager: z.string().optional().describe(
+    "Division.AccountManager — the 3-char user code (e.g. 'ML1', 'JL', 'DL'). " +
+    "Use list_users to discover valid codes."
+  ),
+  customerType: z.string().optional().describe(
+    "Alias for customDropdown2 — the user-visible 'Customer Type' dropdown on this tenant. " +
+    "Backed by DivisionXtra/StandardDropdownField2. Pass the label as it appears in the UI, e.g. 'M.A.T.'."
+  ),
+  // Custom dropdown slots — match the read-side filter shape. Each writes to
+  // DivisionXtra/StandardDropdownField{N} via a follow-up PATCH after the
+  // Division row is created.
+  customDropdown1: z.string().optional().describe("Writes to DivisionXtra/StandardDropdownField1 (paperAccountManager on WCG). Accepts UI label or FK code."),
+  customDropdown2: z.string().optional().describe("Writes to DivisionXtra/StandardDropdownField2 (customerType on WCG). Accepts UI label or FK code."),
+  customDropdown3: z.string().optional().describe("Writes to DivisionXtra/StandardDropdownField3 (officeAllocated on WCG). Accepts UI label or FK code."),
+  customDropdown4: z.string().optional().describe("Writes to DivisionXtra/StandardDropdownField4 (colouredPaperPriceList on WCG). Accepts UI label or FK code."),
+  customDropdown5: z.string().optional().describe("Writes to DivisionXtra/StandardDropdownField5 (laminatingPouchesList on WCG). Accepts UI label or FK code."),
+  // Built-in Division FKs from the Categorisation panel. Live verification on
+  // DivisionId 2069 in round 3 confirmed all PATCH cleanly. Round 5 corrected
+  // the standardIndustryCode label (it's SCHOOL STATUS on this tenant, not
+  // SECTOR) and added sector → Division.LimitedId.
+  standardIndustryCode: z.string().optional().describe(
+    "SCHOOL STATUS — patches Division.StandardIndustryCode. " +
+    "Accepts FK code or UI label (e.g. 'ACADEMY', 'FREE SCHOOL', 'INDEPENDENT', 'LOCAL AUTHORITY', 'NOT A SCHOOL')."
+  ),
+  sector: z.string().optional().describe(
+    "SECTOR — patches Division.LimitedId. Accepts FK code (e.g. 'a9ef19') or UI label (e.g. 'EDUCATION')."
+  ),
+  deliveryZoneCode: z.string().optional().describe(
+    "Delivery Office — patches Division.DeliveryZoneCode. M.A.T. = '5ceeb6'. " +
+    "Accepts the FK code or the UI label."
+  ),
+  priorityId: z.number().int().optional().describe(
+    "Account Tier — patches Division.PriorityId (integer 1/2/3)."
+  ),
+  turnoverId: z.string().optional().describe(
+    "Turnover band — patches Division.TurnoverId. Accepts the FK code or the UI label."
+  ),
+  // Pupil Numbers maps to Division.Employees per WCG convention (Wave MAT
+  // has Employees=446 for ~446 pupils). If a dedicated DivisionXtra slot
+  // surfaces later, swap this over.
+  pupilNumbers: z.number().int().optional().describe(
+    "Pupil Numbers — alias for Division.Employees on the WCG tenant (used as pupil count for schools/MATs)."
+  ),
+  // TODO(area-location, school-status): not exposed yet. The Categorisation
+  // panel of the WCG Division v91 layout shows AREA LOCATION and SCHOOL
+  // STATUS, but the static metadata doesn't tell us which DivisionXtra slot
+  // each maps to on this tenant. To identify:
+  //   1. GET /Divisions(5516)?$expand=DivisionXtra and inspect every
+  //      populated DivisionXtra field on Wave MAT.
+  //   2. Look for FK-shaped values that aren't already in
+  //      StandardDropdownField1..5. Likely candidates are
+  //      StandardSearchTextField1..3 or StandardTextField1..10.
+  //   3. Cross-reference with what the UI shows in the Categorisation panel.
+  // Once identified, add typed parameters here and to list_dropdown_options.
   source: z.string().optional().describe("How this company was sourced"),
   longDescription: z.string().optional().describe("Notes about the company"),
   addressLine1: z.string().optional().describe("Address line 1"),
@@ -65,8 +122,39 @@ export const updateDivisionSchema = z.object({
   employees: z.number().optional().describe("Employee/pupil count"),
   relationship: z.string().optional().describe("Relationship type"),
   salesLedgerId: z.string().optional().describe("Account code"),
-  territoryCode: z.string().optional().describe("Territory code"),
-  customerType: z.string().optional().describe("Customer type"),
+  territoryCode: z.string().optional().describe(
+    "AREA LOCATION — patches Division.TerritoryCode. Accepts FK code or UI label (e.g. 'WG AREA')."
+  ),
+  accountManager: z.string().optional().describe(
+    "Division.AccountManager — the 3-char user code (e.g. 'ML1')."
+  ),
+  customerType: z.string().optional().describe(
+    "Alias for customDropdown2. Writes to DivisionXtra/StandardDropdownField2 (NOT the dead Division.CustomerType column). " +
+    "Pass the UI label, e.g. 'M.A.T.'."
+  ),
+  customDropdown1: z.string().optional().describe("Writes to DivisionXtra/StandardDropdownField1. Accepts UI label or FK code."),
+  customDropdown2: z.string().optional().describe("Writes to DivisionXtra/StandardDropdownField2. Accepts UI label or FK code."),
+  customDropdown3: z.string().optional().describe("Writes to DivisionXtra/StandardDropdownField3. Accepts UI label or FK code."),
+  customDropdown4: z.string().optional().describe("Writes to DivisionXtra/StandardDropdownField4. Accepts UI label or FK code."),
+  customDropdown5: z.string().optional().describe("Writes to DivisionXtra/StandardDropdownField5. Accepts UI label or FK code."),
+  standardIndustryCode: z.string().optional().describe(
+    "SCHOOL STATUS — patches Division.StandardIndustryCode. Accepts FK code or UI label (e.g. 'ACADEMY')."
+  ),
+  sector: z.string().optional().describe(
+    "SECTOR — patches Division.LimitedId. Accepts FK code or UI label (e.g. 'EDUCATION')."
+  ),
+  deliveryZoneCode: z.string().optional().describe(
+    "Delivery Office — patches Division.DeliveryZoneCode. Accepts FK code or UI label."
+  ),
+  priorityId: z.number().int().optional().describe(
+    "Account Tier — patches Division.PriorityId (integer)."
+  ),
+  turnoverId: z.string().optional().describe(
+    "Turnover band — patches Division.TurnoverId. Accepts FK code or UI label."
+  ),
+  pupilNumbers: z.number().int().optional().describe(
+    "Pupil Numbers — alias for Division.Employees on the WCG tenant."
+  ),
   source: z.string().optional().describe("Source"),
   longDescription: z.string().optional().describe("Notes about the company"),
   locale: z.string().optional().describe("Locale"),
@@ -84,10 +172,112 @@ export const lookupCompanyInfoSchema = z.object({
 const DEFAULT_ROLE_CODE = "271c0d"; // "Office / Admin"
 const OPERATING_COMPANY_CODE = "A";  // Westcountry Group (single company)
 
+/**
+ * Build a {StandardDropdownField{N}: <FK code>} body from caller args.
+ *
+ * `customerType` is an alias for `customDropdown2`; an explicit `customDropdown2`
+ * wins if both are supplied. Each value is resolved through the dropdown
+ * cache so the caller can pass either the human label ('M.A.T.') or the
+ * underlying FK string ('Entity.DivisionXtra.StandardDropdownField2.04a2188e').
+ *
+ * Returns null if no dropdown values were supplied.
+ */
+async function buildDivisionXtraDropdownBody(args: {
+  customerType?: string;
+  customDropdown1?: string;
+  customDropdown2?: string;
+  customDropdown3?: string;
+  customDropdown4?: string;
+  customDropdown5?: string;
+}): Promise<Record<string, unknown> | null> {
+  const slots: Array<[number, string | undefined]> = [
+    [1, args.customDropdown1],
+    [2, args.customDropdown2 ?? args.customerType],
+    [3, args.customDropdown3],
+    [4, args.customDropdown4],
+    [5, args.customDropdown5],
+  ];
+  const body: Record<string, unknown> = {};
+  for (const [slot, val] of slots) {
+    if (val !== undefined) {
+      const code = await resolveDropdownValue(`customDropdown${slot}`, val);
+      body[`StandardDropdownField${slot}`] = code;
+    }
+  }
+  return Object.keys(body).length > 0 ? body : null;
+}
+
+/**
+ * Resolve and apply the four built-in Division FK fields (SECTOR, Delivery
+ * Office, Account Tier, Turnover) onto a body object. Each is a label-or-FK
+ * passthrough except priorityId which is numeric.
+ */
+async function applyDivisionStandardFields(
+  body: Record<string, unknown>,
+  fields: {
+    standardIndustryCode?: string;
+    sector?: string;
+    deliveryZoneCode?: string;
+    priorityId?: number;
+    turnoverId?: string;
+  },
+): Promise<void> {
+  if (fields.standardIndustryCode !== undefined) {
+    body.StandardIndustryCode = await resolveDropdownValue("standardIndustryCode", fields.standardIndustryCode);
+  }
+  if (fields.sector !== undefined) {
+    body.LimitedId = await resolveDropdownValue("sector", fields.sector);
+  }
+  if (fields.deliveryZoneCode !== undefined) {
+    body.DeliveryZoneCode = await resolveDropdownValue("deliveryZoneCode", fields.deliveryZoneCode);
+  }
+  if (fields.priorityId !== undefined) {
+    // PriorityId is numeric. resolveDropdownValue returns a string code; cast back.
+    const resolved = await resolveDropdownValue("priorityId", fields.priorityId);
+    body.PriorityId = parseInt(resolved, 10);
+  }
+  if (fields.turnoverId !== undefined) {
+    body.TurnoverId = await resolveDropdownValue("turnoverId", fields.turnoverId);
+  }
+}
+
+/**
+ * Upsert the DivisionXtra row for a Division. DivisionXtra has a 1:1 link to
+ * Division (its primary key IS DivisionId). In practice Prospect auto-creates
+ * the Xtra row alongside the Division, so PATCH is the common case; if the
+ * row is somehow missing we fall back to POST.
+ *
+ * The "Customer Type" dropdown the WCG UI shows is StandardDropdownField2 —
+ * NOT the dead Division.CustomerType built-in column, which 400s with code
+ * -194 ('No primary key value for foreign key division_customertype').
+ */
+async function patchDivisionXtraDropdowns(
+  divisionId: number,
+  body: Record<string, unknown>,
+): Promise<void> {
+  const client = getClient();
+  try {
+    await client.patch<Record<string, unknown>>("DivisionXtras", divisionId, body);
+  } catch (err) {
+    // If the Xtra row doesn't exist (rare), create it. Match on 404; let other errors propagate.
+    const msg = (err as Error).message || "";
+    if (/HTTP 404/.test(msg)) {
+      await client.post<Record<string, unknown>>("DivisionXtras", {
+        DivisionId: divisionId,
+        ...body,
+      });
+      return;
+    }
+    throw err;
+  }
+}
+
 export async function createDivision(args: z.infer<typeof createDivisionSchema>): Promise<string> {
   const client = getClient();
 
-  // Prospect hierarchy: Company → Division → Contact.
+  // Prospect hierarchy: Company → Division → Contact. The Prospect API does
+  // NOT auto-create a parent Company — we explicitly POST one first. Without
+  // this step the Division POST 400s on missing CompanyId.
   // Step 1: Create the Company (requires Name + TypeId "CUS" for customer)
   const company = await client.post<Record<string, unknown>>("Companies", {
     Name: args.name,
@@ -95,7 +285,8 @@ export async function createDivision(args: z.infer<typeof createDivisionSchema>)
   });
   const companyId = company.CompanyId as number;
 
-  // Step 2: Create the Division under the Company
+  // Step 2: Create the Division under the Company. customerType / customDropdown*
+  // are NOT included — those go to the linked DivisionXtra row in step 4.
   const divBody: Record<string, unknown> = {
     Name: args.name,
     CompanyId: companyId,
@@ -107,9 +298,11 @@ export async function createDivision(args: z.infer<typeof createDivisionSchema>)
   if (args.relationship !== undefined) divBody.Relationship = args.relationship;
   if (args.salesLedgerId !== undefined) divBody.SalesLedgerId = args.salesLedgerId;
   if (args.territoryCode !== undefined) divBody.TerritoryCode = args.territoryCode;
-  if (args.customerType !== undefined) divBody.CustomerType = args.customerType;
+  if (args.accountManager !== undefined) divBody.AccountManager = args.accountManager;
   if (args.source !== undefined) divBody.Source = args.source;
   if (args.longDescription !== undefined) divBody.LongDescription = args.longDescription;
+  if (args.pupilNumbers !== undefined) divBody.Employees = args.pupilNumbers;
+  await applyDivisionStandardFields(divBody, args);
 
   const division = await client.post<Record<string, unknown>>("Divisions", divBody);
   const divisionId = division.DivisionId as number;
@@ -131,6 +324,13 @@ export async function createDivision(args: z.infer<typeof createDivisionSchema>)
     await client.patch("Addresses", addressId, addrBody);
   }
 
+  // Step 4: Write any dropdown values to DivisionXtra (the user-visible
+  // "Customer Type" and four other custom dropdowns).
+  const xtraBody = await buildDivisionXtraDropdownBody(args);
+  if (xtraBody) {
+    await patchDivisionXtraDropdowns(divisionId, xtraBody);
+  }
+
   return [
     `Company and division created successfully!`,
     `**CompanyId:** ${companyId}`,
@@ -141,35 +341,52 @@ export async function createDivision(args: z.infer<typeof createDivisionSchema>)
     `**Phone:** ${division.PhoneNumber || "N/A"}`,
     `**Created:** ${(division.Created as string)?.substring(0, 10) || "now"}`,
     `**CRM Link:** ${division.RecordLink || "N/A"}`,
+    xtraBody ? `**Custom dropdowns set on DivisionXtra:** ${Object.keys(xtraBody).join(", ")}` : "",
     "",
     `Next: Use **create_contact** with DivisionId ${divisionId} to add people at this company.`,
-  ].join("\n");
+  ].filter((l) => l !== "").join("\n");
 }
 
 export async function updateDivision(args: z.infer<typeof updateDivisionSchema>): Promise<string> {
   const client = getClient();
   const { divisionId, ...fields } = args;
 
+  // Built-in Division columns. customerType / customDropdown* are NOT here —
+  // they target DivisionXtra and are dispatched separately below.
   const body: Record<string, unknown> = {};
   if (fields.name !== undefined) body.Name = fields.name;
   if (fields.phoneNumber !== undefined) body.PhoneNumber = fields.phoneNumber;
   if (fields.website !== undefined) body.Website = fields.website;
   if (fields.employees !== undefined) body.Employees = fields.employees;
+  if (fields.pupilNumbers !== undefined) body.Employees = fields.pupilNumbers;
   if (fields.relationship !== undefined) body.Relationship = fields.relationship;
   if (fields.salesLedgerId !== undefined) body.SalesLedgerId = fields.salesLedgerId;
   if (fields.territoryCode !== undefined) body.TerritoryCode = fields.territoryCode;
-  if (fields.customerType !== undefined) body.CustomerType = fields.customerType;
+  if (fields.accountManager !== undefined) body.AccountManager = fields.accountManager;
   if (fields.source !== undefined) body.Source = fields.source;
   if (fields.longDescription !== undefined) body.LongDescription = fields.longDescription;
   if (fields.locale !== undefined) body.Locale = fields.locale;
+  await applyDivisionStandardFields(body, fields);
 
-  if (Object.keys(body).length === 0) {
+  const xtraBody = await buildDivisionXtraDropdownBody(fields);
+
+  if (Object.keys(body).length === 0 && !xtraBody) {
     return "No fields provided to update. Specify at least one field to change.";
   }
 
-  await client.patch<Record<string, unknown>>("Divisions", divisionId, body);
+  const changedFields: string[] = [];
 
-  return `Division #${divisionId} updated successfully. Fields changed: ${Object.keys(body).join(", ")}`;
+  if (Object.keys(body).length > 0) {
+    await client.patch<Record<string, unknown>>("Divisions", divisionId, body);
+    changedFields.push(...Object.keys(body));
+  }
+
+  if (xtraBody) {
+    await patchDivisionXtraDropdowns(divisionId, xtraBody);
+    changedFields.push(...Object.keys(xtraBody).map((k) => `DivisionXtra.${k}`));
+  }
+
+  return `Division #${divisionId} updated successfully. Fields changed: ${changedFields.join(", ")}`;
 }
 
 export async function createContact(args: z.infer<typeof createContactSchema>): Promise<string> {

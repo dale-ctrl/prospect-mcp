@@ -22,6 +22,9 @@ export class ProspectClient {
   private token: string;
   private profileId: string;
   private locale: string;
+  private apiUserEmail: string | null = null;
+  private apiUserEmailError: Error | null = null;
+  private apiUserEmailPromise: Promise<string> | null = null;
   private retryDelayMs = 1000;
   private maxRetries = 3;
 
@@ -257,6 +260,54 @@ export class ProspectClient {
     }
 
     return data as T;
+  }
+
+  /**
+   * Resolve the email address of the API user this server authenticates as.
+   * Cached per process. Used by the safety gate in send_quote_email so
+   * customer email is impossible from this MCP. Throws (and caches the
+   * error) if PROSPECT_USER_ID is unset, the lookup fails, or the user
+   * has no email on file. Callers that want to refuse-on-failure should
+   * surface the error verbatim — no silent fallback.
+   */
+  async getApiUserEmail(): Promise<string> {
+    if (this.apiUserEmail) return this.apiUserEmail;
+    if (this.apiUserEmailError) throw this.apiUserEmailError;
+    if (this.apiUserEmailPromise) return this.apiUserEmailPromise;
+
+    this.apiUserEmailPromise = (async () => {
+      const userId = (process.env.PROSPECT_USER_ID || "").trim();
+      if (!userId) {
+        throw new Error(
+          "PROSPECT_USER_ID env var is not set — cannot resolve the API user's email " +
+            "for the send_quote_email safety gate. Set PROSPECT_USER_ID to the CRM UserCode " +
+            "the PAT belongs to (e.g. 'DL').",
+        );
+      }
+      const res = await this.get<{ UserCode: string; EmailAddress: string | null }>(
+        "Users",
+        `$filter=UserCode eq '${userId.replace(/'/g, "''")}'&$select=UserCode,EmailAddress&$top=1`,
+      );
+      const row = res.value[0];
+      if (!row) {
+        throw new Error(
+          `No CRM user found with UserCode '${userId}' — cannot resolve API user email for safety gate.`,
+        );
+      }
+      const email = (row.EmailAddress || "").trim();
+      if (!email) {
+        throw new Error(
+          `CRM user '${userId}' has no EmailAddress on file — cannot resolve API user email for safety gate.`,
+        );
+      }
+      this.apiUserEmail = email;
+      return email;
+    })().catch((err) => {
+      this.apiUserEmailError = err instanceof Error ? err : new Error(String(err));
+      this.apiUserEmailPromise = null;
+      throw this.apiUserEmailError;
+    });
+    return this.apiUserEmailPromise;
   }
 }
 

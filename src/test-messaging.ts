@@ -20,6 +20,8 @@ process.env.PROSPECT_BASE_URL =
 // Short-circuit /Info() auto-fetch for all tests except the header test that
 // overrides this explicitly.
 process.env.PROSPECT_PROFILE_ID = process.env.PROSPECT_PROFILE_ID || "test-profile-id";
+// Required for the send_quote_email safety gate's API-user lookup.
+process.env.PROSPECT_USER_ID = process.env.PROSPECT_USER_ID || "DL";
 
 const { sendQuoteEmail, getMergeOutput, sendEntityEmail, getDocumentContent } = await import(
   "./tools/quote-messaging.js"
@@ -332,18 +334,20 @@ test("sendEntityEmail: resolves missing `to` via defaultToResolver", async () =>
   }
 });
 
-test("sendQuoteEmail: resolves `to` from the quote's primary contact email when omitted", async () => {
+test("sendQuoteEmail: SAFETY GATE — recipient is locked to the API user even when caller omits to/cc/bcc", async () => {
   let merges = 0;
   const mock = installFetchMock((call) => {
-    if (call.url.includes("/DocumentTemplates('_EMLQC')") && call.method === "GET") {
-      return { json: { value: [{ Subject: "Your Quotation Ref: {QuoteId} / {VersionNumber}" }] } };
-    }
-    if (call.url.includes("/Quotes(15234)?") && call.method === "GET") {
+    // Safety-gate API-user lookup. First send_quote_email call after server boot
+    // hits this; the result is then cached on the ProspectClient instance.
+    if (call.url.includes("/Users?") && call.url.includes("UserCode")) {
       return {
         json: {
-          value: [{ QuoteId: 15234, ContactId: 23122, Contact: { Email: "dale@westcountrygroup.com" } }],
+          value: [{ UserCode: "DL", EmailAddress: "apiuser@westcountrygroup.com" }],
         },
       };
+    }
+    if (call.url.includes("/DocumentTemplates('_EMLQC')") && call.method === "GET") {
+      return { json: { value: [{ Subject: "Your Quotation Ref: {QuoteId} / {VersionNumber}" }] } };
     }
     if (call.url.endsWith("/MergeData()")) {
       merges++;
@@ -359,7 +363,10 @@ test("sendQuoteEmail: resolves `to` from the quote's primary contact email when 
     }
     if (call.url.endsWith("/Quotes(15234)/SendMessage()")) {
       const b = call.parsedBody as Record<string, unknown>;
-      assert.equal(b.ToAddress, "dale@westcountrygroup.com");
+      // Safety gate: must be the API user, never anyone else.
+      assert.equal(b.ToAddress, "apiuser@westcountrygroup.com");
+      assert.equal(b.CcAddress, "");
+      assert.equal(b.BccAddress, "");
       assert.equal(b.AttachmentId, "attach-guid-909");
       assert.deepEqual(b.NewDocumentIds, [77]);
       return { json: { value: 909 } };
@@ -388,10 +395,11 @@ test("sendQuoteEmail: resolves `to` from the quote's primary contact email when 
       quoteTemplateCode: "_QUOTE",
       attachPdf: true,
     });
+    assert.match(text, /SAFETY GATE/);
     assert.match(text, /Email sent for Quote #15234/);
     assert.match(text, /Sent-email DocumentId.*909/);
     assert.match(text, /Attachment DocumentId.*77/);
-    assert.match(text, /To:.*dale@westcountrygroup\.com/);
+    assert.match(text, /To:.*apiuser@westcountrygroup\.com/);
     assert.match(text, /Email template.*_EMLQC/);
     assert.match(text, /PDF template.*_QUOTE/);
     assert.match(text, /From:.*sales@westcountrygroup\.com/);
@@ -402,26 +410,63 @@ test("sendQuoteEmail: resolves `to` from the quote's primary contact email when 
   }
 });
 
-test("sendQuoteEmail: throws when resolved contact email is empty", async () => {
+test("sendQuoteEmail: SAFETY GATE — caller-supplied to/cc/bcc are silently overridden to the API user", async () => {
+  // Per spec: calling with to='foo@example.com' must NOT email foo. The
+  // SendMessage body must show the cached API user email instead, and Cc/Bcc
+  // must be empty regardless of what the caller passed.
+  let merges = 0;
+  let sendMessageBody: Record<string, unknown> | null = null;
   const mock = installFetchMock((call) => {
-    if (call.url.includes("/Quotes(5)?") && call.method === "GET") {
-      return { json: { value: [{ QuoteId: 5, ContactId: 1, Contact: { Email: "" } }] } };
+    if (call.url.includes("/Users?") && call.url.includes("UserCode")) {
+      return {
+        json: { value: [{ UserCode: "DL", EmailAddress: "apiuser@westcountrygroup.com" }] },
+      };
+    }
+    if (call.url.includes("/DocumentTemplates('_EMLQC')") && call.method === "GET") {
+      return { json: { value: [{ Subject: "Subj {QuoteId}" }] } };
     }
     if (call.url.endsWith("/MergeData()")) {
-      return mergeResp({ Subject: "S", Body: "B" });
+      merges++;
+      if (merges === 1) return mergeResp({ Subject: "Subj 15234", Body: "B" });
+      if (merges === 2) return mergeResp({ Signature: "Sig" });
+      throw new Error("no merge 3 expected (attachPdf=false)");
     }
-    throw new Error(`Unexpected: ${call.url}`);
+    if (call.url.endsWith("/Quotes(15234)/SendMessage()")) {
+      sendMessageBody = call.parsedBody as Record<string, unknown>;
+      return { json: { value: 1234 } };
+    }
+    if (call.url.includes("/Documents(1234)?") && call.method === "GET") {
+      return { json: { value: [{ DocumentId: 1234 }] } };
+    }
+    throw new Error(`Unexpected: ${call.method} ${call.url}`);
   });
+
   try {
-    await assert.rejects(
-      () => sendQuoteEmail({
-        quoteId: 5,
-        emailTemplateCode: "_EMLQC",
-        quoteTemplateCode: "_QUOTE",
-        attachPdf: false,
-      }),
-      /primary contact has no email on file/,
+    const text = await sendQuoteEmail({
+      quoteId: 15234,
+      to: "foo@example.com",
+      cc: "boss@example.com",
+      bcc: "watcher@example.com",
+      emailTemplateCode: "_EMLQC",
+      attachPdf: false,
+    });
+
+    // Strict assertion: the recipient that hit SendMessage must be the API user,
+    // never the caller-supplied address. cc/bcc must be empty.
+    assert.ok(sendMessageBody, "SendMessage was never called");
+    assert.equal(
+      (sendMessageBody as Record<string, unknown>).ToAddress,
+      "apiuser@westcountrygroup.com",
+      "ToAddress leaked caller's foo@example.com — safety gate failed",
     );
+    assert.equal((sendMessageBody as Record<string, unknown>).CcAddress, "");
+    assert.equal((sendMessageBody as Record<string, unknown>).BccAddress, "");
+
+    // Response must be honest about the override having fired.
+    assert.match(text, /SAFETY GATE: caller-supplied to\/cc\/bcc were ignored/);
+    assert.match(text, /To:.*apiuser@westcountrygroup\.com/);
+    // And must not pretend foo@example.com was emailed.
+    assert.doesNotMatch(text, /foo@example\.com/);
   } finally {
     mock.restore();
   }
