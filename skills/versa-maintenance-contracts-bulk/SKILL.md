@@ -5,8 +5,8 @@ description: >
   the Versa Maintenance fields on each Division and generating the merged contract
   docx + PDF. Trigger whenever the user asks to create, generate, produce, send,
   batch, or split Versa Maintenance Contracts — especially in bulk (e.g. "produce
-  maintenance contracts for all the schools in Wellspring", "create a Versa
-  Maintenance Contract for Beacon Academy"), or whenever a master/umbrella
+  maintenance contracts for all the schools in this trust", "create a Versa
+  Maintenance Contract for Beacon Academy"), or whenever a master multi-site
   contract spans multiple sites that need splitting into per-site agreements.
   Also trigger on requests to fill in the Versa Maintenance tab on a Division
   record, since that is the data backing the contract.
@@ -19,6 +19,41 @@ It bypasses Prospect's `MergeData` API entirely (which has a server-side contact
 requirement that cannot be satisfied from the OData surface) by client-side
 merging from a known-good docx template, then converts each docx to PDF for
 sending.
+
+## Pricing — non-negotiable
+
+This skill applies a single fixed price list. Do NOT ask the user
+to confirm rates. Do NOT offer pricing alternatives. The figures
+below are the only valid ones for this skill.
+
+| Equipment | Rate (ex VAT) |
+|---|---|
+| Mobile Table (Benchmark, Spaceright, Sico — any brand) | £42 each |
+| Wall Pocket — Single | £81 each |
+| Wall Pocket — Double | £105 each |
+| Wall Pocket — Triple | £125 each |
+| Wall Pocket — Quad | £140 each |
+
+**Minimum charge: £336 per visit. Applies on every contract,
+no exceptions.**
+
+To compute a contract total:
+
+```
+subtotal    = sum(quantity × per_unit_rate) for each equipment type
+total_value = max(subtotal, 336.00)
+```
+
+Worked examples (illustrative — apply the rules above to any input):
+
+- 9× Mobile Tables: subtotal = 9 × 42 = 378. max(378, 336) = **378.00**
+- 3× Mobile Tables: subtotal = 3 × 42 = 126. max(126, 336) = **336.00**
+- 1× Single Pocket: subtotal = 1 × 81 = 81. max(81, 336) = **336.00**
+- 5× Mobile Tables + 2× Double Pockets: subtotal = (5×42) + (2×105) = 210 + 210 = 420. max(420, 336) = **420.00**
+
+Do not deviate from these rates. Do not consult `search_quoting_lessons`,
+`get_product_pricing`, or any other tool to "verify" the price — these
+rates are this skill's source of truth.
 
 ## WCG Environment Context
 
@@ -64,62 +99,19 @@ CRM-side data still gets written via `update_division_versa_maintenance`
 Reference live record: **Wimbledon Park Primary School (DivisionId 30479)** —
 both fields populated, 20+ existing merged contracts on file.
 
-## WCG standard rate card
-
-| Equipment | Rate (ex VAT) |
-|---|---|
-| Versa Mobile Table | £42 each |
-| Wall Pocket — Single | £81 each |
-| Wall Pocket — Double | £105 each |
-| Wall Pocket — Triple | £125 each |
-| Wall Pocket — Quad | £140 each |
-
-**Minimum charge: £336 per visit** (equal to 8 mobile tables at the standard
-rate). If a site's quantity × per-unit rate is below £336, the contract value
-is the £336 minimum, not the unit total. Example: 1 mobile table — £336, not
-£42.
-
-**Watch out:** the same £336 figure also appears in the contract body text as
-the "non-service visit" charge — that's a different concept (what we charge
-when an engineer turns up and can't do the work). Don't conflate the two when
-explaining maintenance pricing to the user.
-
-### Customer-specific overrides
-
-If the user mentions an umbrella contract, a discount, a multi-site deal, or
-any non-standard pricing context, confirm the per-unit rate and
-minimum-charge treatment with the user before pricing. Otherwise, apply the
-WCG standard rate card automatically without asking — the user can override
-mid-workflow if needed.
-
-**Worked example — Wellspring Academy Trust (May 2026):**
-
-> **Note:** this example uses non-standard pricing (£40 not £42, no minimum
-> applied). Do not extract specific numbers from it (e.g. £280) as standard
-> defaults — the standard rate is in the rate card above. This example only
-> illustrates how umbrella deals override the defaults.
-
-- Negotiated rate: £40 per Mobile Table (£2 below standard)
-- Minimum charge: not applied per site (umbrella contract spans 22 sites,
-  pricing is treated collectively)
-- Result: 226 mobile tables × £40 = £9,040 grand total, split into 22 per-site
-  contracts ranging from £120 (Joseph Norton, 3 tables) to £1,080 (Springwell
-  Lincoln, 27 tables)
-
-This is the kind of deal that breaks both standard rules. If you see a master
-contract spanning many sites with a custom per-unit rate, ask the user
-whether the £336 minimum applies per site.
-
 ## Business rules
 
-- **Equipment string format.** Match the existing template convention:
+- **Equipment string format.** Default to generic descriptors:
   `"Nx Mobile Tables"`, `"Nx Single Pockets"`, `"Nx Double Pockets"`,
-  `"Nx Triple Pockets"`, `"Nx Quad Pockets"`. For mixed equipment on one site,
-  comma-separate: `"5x Mobile Tables, 2x Single Pockets"`.
+  `"Nx Triple Pockets"`, `"Nx Quad Pockets"`. If the user specifies a
+  brand (Benchmark, Spaceright, or Sico), include it in the string,
+  e.g. `"Nx Versa Benchmark Tables"`. Pricing is the same for any
+  Mobile Table brand. For mixed equipment on one site, comma-separate:
+  `"5x Mobile Tables, 2x Single Pockets"`.
 - **Total value format.** Pass to MCP as a STRING with two decimal places,
   e.g. `"294.00"`. JSON serialisation drops trailing zeros if you pass a
   number (`280` becomes `"280"`, not `"280.00"`).
-- **One contract per Division.** If the master is a trust-level umbrella,
+- **One contract per Division.** If the master spans multiple sites,
   split into per-school contracts numbered in master row order so re-orderings
   are spottable.
 - **Multiple campuses = multiple Divisions.** A single Academy operating
@@ -154,8 +146,10 @@ whether the £336 minimum applies per site.
 
 Use `search_divisions` by name. For ambiguous matches, filter by:
 
-- AM matches the trust's AM (Wellspring = `JL`)
-- Territory consistent with trust footprint (Wellspring = NORTHEAST or YORKSHIRE)
+- AM matches the trust's AM (look up the parent trust's account manager
+  via a sibling Division)
+- Territory consistent with trust footprint (regional cluster of
+  sibling Divisions)
 - Relationship is "Prospect" or matches the existing pattern
 
 Bulk `list_divisions` with `filters.postcode` is useful for finding misspelled
@@ -182,33 +176,22 @@ the user to set Customer Type in the UI.
 
 ### 2. Compute the per-site total and write Versa fields
 
-**DO NOT ask the user for the total maintenance value. Compute it.**
+Apply the price list from "Pricing — non-negotiable" above. The maths
+is fixed; do not ask the user to confirm any of it.
 
-Formula:
-
+```python
+# Look up the per-unit rate from the price list above
+subtotal = sum(quantity * per_unit_rate for each equipment type)
+total_value = max(subtotal, 336.00)
 ```
-per_unit_rate = lookup(equipment_type, RATE_CARD)
-subtotal      = quantity * per_unit_rate
-total_value   = max(subtotal, 336.00)   # £336 minimum applies unless override
-```
 
-Worked example: `"9x mobile tables, standard rate"` → `per_unit_rate = £42`,
-`subtotal = 9 × 42 = £378`, `max(378, 336) = £378`. So
-`total_value = "378.00"`.
-
-**Only ASK the user about the total value if:**
-
-- they've signalled an umbrella or non-standard pricing context
-- the equipment type doesn't match anything in the rate card
-- they've explicitly told you to confirm pricing
-
-Otherwise compute silently and proceed to the write:
+Then call:
 
 ```
 update_division_versa_maintenance({
   divisionId: <id>,
-  equipmentMaintained: "Nx Mobile Tables",
-  totalMaintenanceValue: "X.00"   // STRING — see business rules
+  equipmentMaintained: "Nx Mobile Tables",   # or appropriate equipment string
+  totalMaintenanceValue: "X.00"               # STRING, 2dp, no currency symbol
 })
 ```
 
@@ -337,8 +320,9 @@ Word installed) or `unoconv` — but in the standard Claude Code sandbox
 
 ### 7. Reconcile to master contract total
 
-For umbrella contracts: sum per-school totals must equal the master grand
-total exactly. Do not proceed with sending if maths doesn't reconcile.
+For multi-site master contracts: sum per-school totals must equal the
+master grand total exactly. Do not proceed with sending if maths
+doesn't reconcile.
 
 ### 8. Hand the PDF files to the user
 
@@ -378,11 +362,7 @@ callers cannot directly email customers. Workflow is always:
 9. **£336 means two different things** — both the standard per-visit minimum
    for live contracts AND the non-service visit charge in the contract terms.
    Don't conflate.
-10. **Confirm pricing only when an override is signalled.** If the user
-    mentions an umbrella contract, a discount, or any non-standard pricing
-    context, confirm the per-unit rate before applying. Otherwise default
-    to the WCG standard rate card without asking.
-11. **Three LibreOffice rendering quirks must be patched in normalise_anchors**:
+10. **Three LibreOffice rendering quirks must be patched in normalise_anchors**:
     column-anchored images overshoot right margin; behindDoc=0 logos break
     the top page-frame border; v:shape with mso-height-percent stretches
     across pages and leaks bottom edge on page 2. All three fixes are baked
@@ -391,8 +371,8 @@ callers cannot directly email customers. Workflow is always:
 ## Verification checklist
 
 - [ ] All sites matched to DivisionIds (or new ones created)
-- [ ] Per-site total computed correctly (rate × quantity, with minimum applied
-      unless overridden)
+- [ ] Per-site total computed correctly (rate × quantity, with the £336
+      minimum applied)
 - [ ] Versa fields populated on every Division (`get_division_details` shows
       them under "Versa Maintenance" section)
 - [ ] All docx files produced under `outputs/<project>/`
@@ -434,3 +414,10 @@ callers cannot directly email customers. Workflow is always:
   textbox across two pages, leaking its bottom edge as a stray line on
   page 2. All three layout fixes now applied together in
   normalise_anchors().
+- 2026-05-07: Hard-coded the price list and removed all override / negotiated-
+  rate pathways. Earlier versions had a Wellspring worked example using £40
+  per Mobile Table, which the model was extracting as evidence that pricing
+  was variable. The price list is now stated as non-negotiable, the Wellspring
+  example is removed, and Step 2 has no "ask the user" branch. If a future
+  umbrella deal needs non-standard pricing, document it in the chat for that
+  batch run — not in the skill.
