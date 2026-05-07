@@ -94,6 +94,11 @@ mid-workflow if needed.
 
 **Worked example — Wellspring Academy Trust (May 2026):**
 
+> **Note:** this example uses non-standard pricing (£40 not £42, no minimum
+> applied). Do not extract specific numbers from it (e.g. £280) as standard
+> defaults — the standard rate is in the rate card above. This example only
+> illustrates how umbrella deals override the defaults.
+
 - Negotiated rate: £40 per Mobile Table (£2 below standard)
 - Minimum charge: not applied per site (umbrella contract spans 22 sites,
   pricing is treated collectively)
@@ -177,16 +182,27 @@ the user to set Customer Type in the UI.
 
 ### 2. Compute the per-site total and write Versa fields
 
-For each site:
+**DO NOT ask the user for the total maintenance value. Compute it.**
+
+Formula:
 
 ```
-total_value = max(quantity * per_unit_rate, MINIMUM_CHARGE)
+per_unit_rate = lookup(equipment_type, RATE_CARD)
+subtotal      = quantity * per_unit_rate
+total_value   = max(subtotal, 336.00)   # £336 minimum applies unless override
 ```
 
-…unless the user has confirmed the minimum doesn't apply (e.g. umbrella
-contract).
+Worked example: `"9x mobile tables, standard rate"` → `per_unit_rate = £42`,
+`subtotal = 9 × 42 = £378`, `max(378, 336) = £378`. So
+`total_value = "378.00"`.
 
-Then call:
+**Only ASK the user about the total value if:**
+
+- they've signalled an umbrella or non-standard pricing context
+- the equipment type doesn't match anything in the rate card
+- they've explicitly told you to confirm pricing
+
+Otherwise compute silently and proceed to the write:
 
 ```
 update_division_versa_maintenance({
