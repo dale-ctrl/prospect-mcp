@@ -121,6 +121,31 @@ both fields populated, 20+ existing merged contracts on file.
 
 ## Workflow
 
+### 0. Mount a user-owned output folder (FIRST STEP, every run)
+
+Files written from the sandbox into the cowork session outputs path
+(`local_*/outputs`) inherit Linux-side ownership only. Adobe Acrobat
+refuses to open them with "There was an error opening this document.
+Access denied." Edge silently fails to render them. The same happens
+with any other Windows app strict about file ACLs.
+
+Fix: at the very start of every run, call
+`mcp__cowork__request_cowork_directory` so the user picks a folder on
+their own machine. Files written into a connected user-owned folder
+inherit proper Windows ACLs and open cleanly in Acrobat.
+
+Do NOT hardcode any path that contains a username (no
+`C:\Users\<name>\...`). The skill must work for any user without edits.
+Suggest the user pick a portable, easily-locatable folder (their
+Desktop, Documents, or a dedicated `versa-contracts` folder) but let
+them choose.
+
+After the folder is connected, use the mount path returned by
+`request_cowork_directory` as the project root, and create
+`<mount>/<project-name>/` as the output subfolder. Save both the
+docx and pdf there. Never save the deliverable inside the cowork
+session outputs path.
+
 ### Tools you MUST NOT call
 
 - **`merge_division_document`** — hits `MergeData`, returns 500
@@ -174,6 +199,30 @@ the Prospect UI. Tell them which CompanyId was created so they can do it.
 the FK code, despite the schema saying both work. If unsure, omit it and ask
 the user to set Customer Type in the UI.
 
+### 1c. Pre-merge data quality check (for every Division)
+
+Before computing totals or writing fields, run `get_division_details` and
+sanity-check the data that will land in the contract. Surface any of these
+to the user before proceeding:
+
+- **Phone number malformed.** UK landlines should have ≥9 digits when
+  non-digits are stripped. The Westcountry Interiors run found `"696300"`
+  (6 digits — missing the `01752` STD code). Rule:
+  ```python
+  if len(re.sub(r'\D', '', phone or '')) < 9:
+      flag(f"Phone '{phone}' on {name} looks short — expected ≥9 digits for a UK landline.")
+  ```
+  Tell the user; they can update the Division phone in CRM before the contract
+  is generated, or proceed knowingly.
+- **Address lines missing.** The contract template has 5 address rows. If
+  fewer are populated, the empty rows render blank in the merged docx — fine,
+  but flag if the postcode field is empty (that always looks wrong on the
+  contract).
+- **No primary contact email.** The "Email address" row on the contract is
+  blank by design (the template doesn't pull from contacts) — but if the user
+  wants an email recipient on the contract face, the Division must have a
+  primary contact set first.
+
 ### 2. Compute the per-site total and write Versa fields
 
 Apply the price list from "Pricing — non-negotiable" above. The maths
@@ -184,6 +233,30 @@ is fixed; do not ask the user to confirm any of it.
 subtotal = sum(quantity * per_unit_rate for each equipment type)
 total_value = max(subtotal, 336.00)
 ```
+
+**Pre-update conflict check.** Before calling
+`update_division_versa_maintenance`, fetch the Division's existing Versa
+fields via `get_division_details` and compare to what you're about to
+write. If the existing fields are non-empty AND different from the new
+figures, surface the conflict to the user:
+
+```
+Division 5380 (Westcountry Interiors Ltd) already has:
+  Equipment: 9x Mobile Tables
+  Total:     378.00
+
+About to overwrite with:
+  Equipment: 14x Mobile Tables
+  Total:     588.00
+
+Proceed? (yes / keep existing / cancel)
+```
+
+This catches accidental overwrites of an active contract. Do not silently
+overwrite — the previous contract may still be in force, and the user may
+want to keep both records or chase the existing contract first.
+
+If the existing values match what you'd write, no need to ask — just proceed.
 
 Then call:
 
@@ -219,6 +292,37 @@ the per-school data needs swapping.
 `.paragraphs` iteration won't see it. Use raw XML on `word/document.xml` and
 `str.replace()` on the unzipped XML — the cost string only occurs once in the
 document.
+
+**Watch for transient duplicates in REPLACEMENTS.** Some source strings
+appear twice in the XML *until* an earlier replacement runs. The classic
+example: Wimbledon source has "Wimbledon" in BOTH the school name
+("Wimbledon Park Primary School") AND the address line. If you sanity-check
+all REPLACEMENTS counts upfront, the count for "Wimbledon" is 2 and any
+`if count != 1` check fails the run.
+
+The fix is to count *per-step*, after each prior replacement has run, not
+all upfront. Order the REPLACEMENTS list so longer/more-specific strings
+replace first ("Wimbledon Park Primary School" before "Wimbledon"):
+
+```python
+REPLACEMENTS = [
+    ('Wimbledon Park Primary School', new_client_name),    # MUST be first
+    ('9 x Versa Benchmark Tables',    new_equipment),
+    ('Havana Road',                   addr_line_1),
+    ('Wimbledon',                     addr_line_2),         # safe — school name already gone
+    ('London',                        addr_line_3),
+    ('Surrey',                        addr_line_4),
+    ('SW19 8EJ',                      addr_postcode),
+    ('020 8946 4925',                 tel_no),
+    ('378.00',                        f"{total_value:.2f}"),
+]
+
+for old, new in REPLACEMENTS:
+    cnt = xml.count(old)
+    if cnt < 1:
+        raise SystemExit(f"missing {old!r} in template")
+    xml = xml.replace(old, new, 1)   # replace one at a time
+```
 
 **Three layout fixes that MUST be applied to each merged docx for clean PDF
 output via LibreOffice.** All three can be implemented inside a single
@@ -287,17 +391,82 @@ If the WCG branding template ever gets updated (different margins, new
 logos, additional anchored shapes), re-derive `LEFT_MARGIN_CM` and
 `RIGHT_MARGIN_CM` from the new template's `sectPr` element and re-run.
 
-### 4. Trim trailing empty paragraphs
+### 4. Trim the empty paragraphs between signature and footer
 
 The Wimbledon template has 19-20 empty paragraphs between "Please sign and
-return" and the version-date footer (e.g. "Sept 2025 (2)"). These cause a
-blank page at the end. Trim them down to 1, keeping the version footer on the
-same page as the signature block.
+return" and the version-date footer (e.g. "Sept 2025 (2)"). Without
+trimming, the contract gets a blank trailing page. Trim them down to 1,
+keeping the version footer on the same page as the signature block.
+
+**Critical:** these are NOT trailing paragraphs (they are not at the very
+end of the body — the version footer comes after them). A naive
+"remove trailing empty paragraphs after sectPr" approach trims zero. And
+a "collapse every run of N+ empty paragraphs to 1" approach over-trims:
+several mid-document runs (between "THIS CONTRACT ANNUAL COST" and the
+signature block) reserve vertical space behind the floating cost textbox
+and must be left alone.
+
+Use this targeted trim — find "Please sign and return", find the next
+version-date footer line (matches `(Jan|Feb|...|Sept|Sep|Oct|Nov|Dec)[a-z]*\s+\d{4}`),
+and remove only the empty paragraphs between them:
+
+```python
+W_NS = 'http://schemas.openxmlformats.org/wordprocessingml/2006/main'
+T_TAG = f'{{{W_NS}}}t'
+P_TAG = f'{{{W_NS}}}p'
+
+def text_of(el):
+    if el.tag != P_TAG:
+        return ''
+    return ''.join((t.text or '') for t in el.iter(T_TAG)).strip()
+
+def is_empty_para(el):
+    return el.tag == P_TAG and not text_of(el)
+
+root = etree.fromstring(xml.encode('utf-8'))
+body = root.find(f'{{{W_NS}}}body')
+children = list(body)
+
+sign_idx = None
+footer_idx = None
+for i, el in enumerate(children):
+    txt = text_of(el)
+    if txt == 'Please sign and return':
+        sign_idx = i
+    elif sign_idx is not None and footer_idx is None and re.match(
+            r'(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Sept|Oct|Nov|Dec)[a-z]*\s+\d{4}', txt):
+        footer_idx = i
+        break
+
+# Keep ONE empty paragraph after sign_idx, remove the rest up to footer_idx
+if sign_idx is not None and footer_idx is not None and footer_idx - sign_idx > 2:
+    for el in children[sign_idx + 2 : footer_idx]:
+        if is_empty_para(el):
+            body.remove(el)
+
+# Serialise body back to XML for re-zipping
+xml = etree.tostring(root, xml_declaration=True, encoding='UTF-8', standalone=True).decode('utf-8')
+```
+
+After trim, the typical paragraph count drops from ~124 to ~105.
 
 ### 5. Verify each merged output
 
-Re-open and grep for: all target values present, all template-source residue
-gone, paragraph count <= ~110 (otherwise blank trailing page).
+Re-open and grep for: all target values present, all template-source
+residue gone, paragraph count ~105 (in the range 100–110 — significantly
+above 110 means the trim didn't run and the PDF will have a blank trailing
+page; significantly below 100 means the trim was too aggressive and may
+have collapsed the spacing for the floating cost textbox).
+
+**Expected page count: 3 pages** (not 2). The Wimbledon-template structure
+is:
+- Page 1: client + address + intro + works/services included
+- Page 2: terms, exclusions, parts, "THIS CONTRACT ANNUAL COST £X.00 ex VAT"
+- Page 3: signature block + "Please sign and return" + "Sept 2025 (2)" footer
+
+If the PDF comes out as 4 pages, the trim probably didn't run. If it comes
+out as 2 pages, something has compacted the layout — investigate before
+shipping (the cost textbox may have moved up under the terms block).
 
 ### 6. Convert every docx to PDF
 
@@ -326,11 +495,18 @@ doesn't reconcile.
 
 ### 8. Hand the PDF files to the user
 
-Save outputs under `outputs/<project-name>/` numbered in master row order.
-Both the .docx (editable) and .pdf (sendable) live side-by-side. Present the
-PDFs to the user via `mcp__cowork__present_files` (fall back to plain
-markdown `computer://` links if it errors on the path layout). The docx
-files are kept as backups in case any contract needs hand-editing later.
+Save outputs under `<mount>/<project-name>/` (the mount path returned
+by Step 0's `request_cowork_directory` call), numbered in master row
+order. Both the .docx (editable) and .pdf (sendable) live side-by-side.
+Present the PDFs to the user via `mcp__cowork__present_files` (fall
+back to plain markdown `computer://` links if it errors on the path
+layout — paths with spaces or non-ASCII characters often trip it). The
+docx files are kept as backups in case any contract needs hand-editing
+later.
+
+Never save deliverables under the cowork session outputs path
+(`local_*/outputs`). Files written there cannot be opened by Adobe
+Acrobat — see Step 0.
 
 ## emailTo safety gate
 
@@ -348,35 +524,61 @@ callers cannot directly email customers. Workflow is always:
 2. **`totalMaintenanceValue` 2dp** — pass as string `"X.00"`, not a number.
 3. **Cost in Word textbox** — needs raw XML manipulation, not python-docx
    `.paragraphs`.
-4. **Source template trailing empty paragraphs** — trim 19 of 20 between
-   "Please sign and return" and the version footer.
-5. **`create_division` orphans CompanyId** — every call creates a fresh
+4. **Empty paragraphs to trim are NOT trailing** — they sit between
+   "Please sign and return" and the "Sept 2025 (2)" version footer. Use
+   the targeted-trim snippet in Step 4. A trailing-only or "collapse every
+   run" approach will be wrong.
+5. **REPLACEMENTS transient duplicates** — "Wimbledon" appears in both the
+   school name and the address line; count per-step, not upfront, and
+   replace longer-and-more-specific strings first (see Step 3).
+6. **Existing Versa fields silently overwritten** — always `get_division_details`
+   first, surface a conflict if the existing data differs from what's
+   about to be written (see Step 2).
+7. **Truncated phone numbers in CRM** — UK landlines under 9 digits suggest
+   the STD code is missing. Flag pre-merge so the user can fix the CRM
+   record (see Step 1c).
+8. **`create_division` orphans CompanyId** — every call creates a fresh
    Company. Manual merge in UI required.
-6. **`customDropdown2` resolver** — UI label only, despite schema saying FK
+9. **`customDropdown2` resolver** — UI label only, despite schema saying FK
    codes work.
-7. **Address line count varies** — Wimbledon template has 5 lines, most
-   schools have 4. Merger replaces all 5; 5th becomes empty if school has
-   fewer.
-8. **`present_files` may reject paths** — fall back to plain markdown
-   `computer://` links.
-9. **£336 means two different things** — both the standard per-visit minimum
-   for live contracts AND the non-service visit charge in the contract terms.
-   Don't conflate.
-10. **Three LibreOffice rendering quirks must be patched in normalise_anchors**:
+10. **Address line count varies** — Wimbledon template has 5 lines, most
+    schools have 4. Merger replaces all 5; 5th becomes empty if school has
+    fewer.
+11. **`present_files` may reject paths** — fall back to plain markdown
+    `computer://` links. Most likely on paths with spaces or non-ASCII
+    characters.
+12. **£336 means two different things** — both the standard per-visit minimum
+    for live contracts AND the non-service visit charge in the contract terms.
+    Don't conflate.
+13. **Three LibreOffice rendering quirks must be patched in normalise_anchors**:
     column-anchored images overshoot right margin; behindDoc=0 logos break
     the top page-frame border; v:shape with mso-height-percent stretches
     across pages and leaks bottom edge on page 2. All three fixes are baked
     into the merger above — don't strip them.
+14. **Cowork session outputs path has wrong Windows ACLs.** Files written
+    via the sandbox to `local_*/outputs` cannot be opened by Adobe Acrobat
+    ("Access denied") and Edge fails to render them. Always use Step 0's
+    `request_cowork_directory` mount instead. Never hardcode user-specific
+    paths like `C:\Users\<name>\...` — the skill must work for any user.
 
 ## Verification checklist
 
+- [ ] User-owned output folder mounted via `request_cowork_directory`
+      at the start of the run (not the cowork session outputs path)
 - [ ] All sites matched to DivisionIds (or new ones created)
+- [ ] Pre-merge data quality checked: phone ≥9 digits, address populated,
+      missing data flagged to user
+- [ ] Existing Versa fields checked before overwrite; conflicts surfaced
+      to user
 - [ ] Per-site total computed correctly (rate × quantity, with the £336
       minimum applied)
 - [ ] Versa fields populated on every Division (`get_division_details` shows
       them under "Versa Maintenance" section)
-- [ ] All docx files produced under `outputs/<project>/`
+- [ ] All docx files produced under `<mount>/<project>/`
+- [ ] Targeted trim ran: paragraph count in 100–110 range
 - [ ] All docx converted to PDF in the same folder via LibreOffice
+- [ ] PDF page count = 3 (page 1 client/intro, page 2 terms/cost,
+      page 3 signature/footer)
 - [ ] Sample PDF spot-checked: page-frame border continuous on top and sides
       of every page, cost textbox doesn't leak a stray line on page 2
       bottom-right, VERSO logo sits inside frame on page 1 top-right
@@ -421,3 +623,35 @@ callers cannot directly email customers. Workflow is always:
   example is removed, and Step 2 has no "ask the user" branch. If a future
   umbrella deal needs non-standard pricing, document it in the chat for that
   batch run — not in the skill.
+- 2026-05-07 (later same session): Added Step 0 (mount a user-owned output
+  folder via `request_cowork_directory`) and made it the first action of
+  every run. Discovered during the Westcountry Interiors run: PDFs written
+  to the cowork session outputs path (`local_*/outputs`) inherit Linux-side
+  ACLs only, and Adobe Acrobat refuses to open them ("There was an error
+  opening this document. Access denied."), Edge silently fails. Files
+  written into a user-mounted folder inherit proper Windows ACLs and open
+  cleanly. The skill must NOT hardcode any user-specific path — it must
+  work for any user without edits, so the user picks the destination at
+  the start of each run.
+- 2026-05-07 (Westcountry Interiors retro): Five tightenings folded in after
+  the single-site Westcountry Interiors run.
+  (a) Step 4 trim now has an explicit implementation snippet — earlier
+  versions described it in prose, leading to two wrong attempts: a
+  "trailing-only" trim that removed zero paragraphs, and a "collapse every
+  run of 4+ empties" that over-trimmed the floating-cost-textbox spacing.
+  Targeted-trim locates "Please sign and return" and the next version-date
+  footer, then removes only the empties between them.
+  (b) Step 3 now warns about REPLACEMENTS transient duplicates (e.g.
+  "Wimbledon" appears in both the school name and the address line) and
+  requires per-step counts rather than an upfront pass.
+  (c) Step 2 now mandates a pre-update conflict check via
+  `get_division_details` before overwriting non-empty Versa fields. The
+  Westcountry Interiors run silently overwrote 9x/£378 with 14x/£588 — fine
+  in this case, but the skill should never silently clobber an active
+  contract.
+  (d) Step 1c added: pre-merge data quality check, including a UK-landline
+  digit-count rule (≥9 digits when stripped of non-digits). Westcountry
+  Interiors had `"696300"` — 6 digits, missing the 01752 STD code; the
+  contract went out short.
+  (e) Step 5 verification now states the expected page count is 3, not 2,
+  to head off over-trimming attempts aimed at a 2-page result.
