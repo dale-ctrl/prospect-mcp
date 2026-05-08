@@ -68,6 +68,9 @@ export declare const createEnquirySchema: z.ZodObject<{
     addressLine3: z.ZodOptional<z.ZodString>;
     postcode: z.ZodOptional<z.ZodString>;
     country: z.ZodOptional<z.ZodString>;
+    campaignId: z.ZodOptional<z.ZodNumber>;
+    campaignActivityId: z.ZodOptional<z.ZodNumber>;
+    assignedTo: z.ZodOptional<z.ZodString>;
 }, "strip", z.ZodTypeAny, {
     description?: string | undefined;
     title?: string | undefined;
@@ -84,6 +87,9 @@ export declare const createEnquirySchema: z.ZodObject<{
     jobTitle?: string | undefined;
     email?: string | undefined;
     companyName?: string | undefined;
+    assignedTo?: string | undefined;
+    campaignId?: number | undefined;
+    campaignActivityId?: number | undefined;
     mobileNumber?: string | undefined;
     enquiryFormId?: string | undefined;
     sourceTypeCode?: string | undefined;
@@ -108,6 +114,9 @@ export declare const createEnquirySchema: z.ZodObject<{
     jobTitle?: string | undefined;
     email?: string | undefined;
     companyName?: string | undefined;
+    assignedTo?: string | undefined;
+    campaignId?: number | undefined;
+    campaignActivityId?: number | undefined;
     mobileNumber?: string | undefined;
     enquiryFormId?: string | undefined;
     sourceTypeCode?: string | undefined;
@@ -131,6 +140,8 @@ export declare const updateEnquirySchema: z.ZodObject<{
     description: z.ZodOptional<z.ZodString>;
     source: z.ZodOptional<z.ZodString>;
     sourceTypeCode: z.ZodOptional<z.ZodString>;
+    campaignActivityId: z.ZodOptional<z.ZodNullable<z.ZodNumber>>;
+    assignedTo: z.ZodOptional<z.ZodNullable<z.ZodString>>;
 }, "strip", z.ZodTypeAny, {
     enquiryId: number;
     description?: string | undefined;
@@ -143,6 +154,8 @@ export declare const updateEnquirySchema: z.ZodObject<{
     jobTitle?: string | undefined;
     email?: string | undefined;
     companyName?: string | undefined;
+    assignedTo?: string | null | undefined;
+    campaignActivityId?: number | null | undefined;
     mobileNumber?: string | undefined;
     sourceTypeCode?: string | undefined;
 }, {
@@ -157,6 +170,8 @@ export declare const updateEnquirySchema: z.ZodObject<{
     jobTitle?: string | undefined;
     email?: string | undefined;
     companyName?: string | undefined;
+    assignedTo?: string | null | undefined;
+    campaignActivityId?: number | null | undefined;
     mobileNumber?: string | undefined;
     sourceTypeCode?: string | undefined;
 }>;

@@ -13,7 +13,7 @@ let _userCache = null;
  * Accepts "ML", "Miles Liesching", "Miles", "Liesching" etc.
  * Returns { codes: string[], resolved: Map<input, code> } or throws if any can't be matched.
  */
-async function resolveUserCodes(inputs) {
+export async function resolveUserCodes(inputs) {
     const client = getClient();
     if (!_userCache) {
         const result = await client.get("Users", "$select=UserCode,UserName&$filter=Obsolete eq 0");

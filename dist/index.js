@@ -36,6 +36,7 @@ import { getProductCategoriesSchema, getProductCategories, searchProductsByCateg
 import { searchOpportunitiesSchema, searchOpportunities, getOpportunitySchema, getOpportunity, createOpportunitySchema, createOpportunity, updateOpportunitySchema, updateOpportunity, getLeadLookupsSchema, getLeadLookups, } from "./tools/opportunities.js";
 import { reportAccountsWithoutTasksSchema, reportAccountsWithoutTasks, searchTasksSchema, searchTasks, getTerritoriesSchema, getTerritories, reportDivisionSummarySchema, reportDivisionSummary, createTaskSchema, createTask, updateTaskSchema, updateTask, getTaskTypesSchema, getTaskTypes, } from "./tools/reports.js";
 import { searchEnquiriesSchema, searchEnquiries, getEnquirySchema, getEnquiry, createEnquirySchema, createEnquiry, updateEnquirySchema, updateEnquiry, } from "./tools/enquiries.js";
+import { linkEnquiryToCampaignSchema, linkEnquiryToCampaign, unlinkEnquiryFromCampaignSchema, unlinkEnquiryFromCampaign, assignEnquirySchema, assignEnquiry, } from "./tools/campaign-enquiry.js";
 import { searchDocumentsSchema, searchDocuments, getDocumentSchema, getDocument, getDocumentTypesSchema, getDocumentTypes, } from "./tools/documents.js";
 import { searchCampaignsSchema, searchCampaigns, getCampaignSchema, getCampaign, searchCampaignActivitiesSchema, searchCampaignActivities, getCampaignActivityContactsSchema, getCampaignActivityContacts, createCampaignSchema, createCampaign, } from "./tools/campaigns.js";
 import { searchOrdersSchema, searchOrders, getOrderSchema, getOrder, reportOrdersByDivisionSchema, reportOrdersByDivision, } from "./tools/orders.js";
@@ -224,6 +225,9 @@ const TOOL_PERMISSION_MAP = {
     create_campaign: { module: "campaigns", action: "create" },
     create_enquiry: { module: "enquiries", action: "create" },
     update_enquiry: { module: "enquiries", action: "edit" },
+    link_enquiry_to_campaign: { module: "enquiries", action: "link_campaign" },
+    unlink_enquiry_from_campaign: { module: "enquiries", action: "link_campaign" },
+    assign_enquiry: { module: "enquiries", action: "assign" },
     create_inventory: { module: "inventory", action: "create" },
     update_inventory: { module: "inventory", action: "edit" },
     save_quoting_lesson: { module: "knowledge", action: "create" },
@@ -1277,15 +1281,36 @@ catch (err) {
     return { content: [{ type: "text", text: `Error: ${err.message}` }], isError: true };
 } });
 // ─── Gap Fix: Enquiry Create/Update ──────────────────────────
-registerWriteTool("create_enquiry", "Create an inbound enquiry. All fields optional — fill in what you know (name, company, email, phone, description, source, UTM, address).", createEnquirySchema.shape, async (args) => { try {
+registerWriteTool("create_enquiry", "Create an inbound enquiry. All identity fields optional — fill in what you know (name, company, email, phone, description, source, UTM, address). Optional: campaignId / campaignActivityId to link to a campaign in the same call (for bulk loaders), and assignedTo (code or name) to set the owner at create time.", createEnquirySchema.shape, async (args) => { try {
     const result = await createEnquiry(createEnquirySchema.parse(args));
     return { content: [{ type: "text", text: result }] };
 }
 catch (err) {
     return { content: [{ type: "text", text: `Error: ${err.message}` }], isError: true };
 } });
-registerWriteTool("update_enquiry", "Update an existing enquiry's details.", updateEnquirySchema.shape, async (args) => { try {
+registerWriteTool("update_enquiry", "Update an existing enquiry's details. New in v1.4: pass campaignActivityId (number or null to unlink) and assignedTo (code/name or null to unassign) for in-place re-assignment and re-linking. For dedicated workflows prefer link_enquiry_to_campaign / unlink_enquiry_from_campaign / assign_enquiry which gate via separate permissions.", updateEnquirySchema.shape, async (args) => { try {
     const result = await updateEnquiry(updateEnquirySchema.parse(args));
+    return { content: [{ type: "text", text: result }] };
+}
+catch (err) {
+    return { content: [{ type: "text", text: `Error: ${err.message}` }], isError: true };
+} });
+registerWriteTool("link_enquiry_to_campaign", "Link an existing enquiry to a campaign by setting its CampaignActivityId. Pass campaignId (required) and optionally campaignActivityId — when omitted, defaults to the campaign's lowest-id activity. Validates both records exist before writing.", linkEnquiryToCampaignSchema.shape, async (args) => { try {
+    const result = await linkEnquiryToCampaign(linkEnquiryToCampaignSchema.parse(args));
+    return { content: [{ type: "text", text: result }] };
+}
+catch (err) {
+    return { content: [{ type: "text", text: `Error: ${err.message}` }], isError: true };
+} });
+registerWriteTool("unlink_enquiry_from_campaign", "Clear the campaign association on an existing enquiry (sets CampaignActivityId to null). Idempotent — already-unlinked enquiries report no change.", unlinkEnquiryFromCampaignSchema.shape, async (args) => { try {
+    const result = await unlinkEnquiryFromCampaign(unlinkEnquiryFromCampaignSchema.parse(args));
+    return { content: [{ type: "text", text: result }] };
+}
+catch (err) {
+    return { content: [{ type: "text", text: `Error: ${err.message}` }], isError: true };
+} });
+registerWriteTool("assign_enquiry", "Set or clear the owner (AssignedTo) on an existing enquiry. Accepts user code or name; pass null to unassign. AssignedDate is auto-populated by the server.", assignEnquirySchema.shape, async (args) => { try {
+    const result = await assignEnquiry(assignEnquirySchema.parse(args));
     return { content: [{ type: "text", text: result }] };
 }
 catch (err) {

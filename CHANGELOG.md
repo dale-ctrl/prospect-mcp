@@ -6,6 +6,25 @@ The format is based on Keep a Changelog, and this project adheres to Semantic Ve
 
 ## [Unreleased]
 
+## [1.4.0] - 2026-05-08
+### Added
+- **Enquiry ↔ Campaign linkage** and **Enquiry ownership** are now writable through the connector — addresses the gap where MCP-loaded enquiries didn't appear on a campaign's lead list and couldn't be assigned to a BDE programmatically. New module [src/tools/campaign-enquiry.ts](src/tools/campaign-enquiry.ts) backed by `Enquiry.CampaignActivityId` and `Enquiry.AssignedTo`.
+  - `link_enquiry_to_campaign({ enquiryId, campaignId, campaignActivityId? })` — sets the activity. When `campaignActivityId` is omitted, defaults to the campaign's lowest-id activity. Validates both records exist before writing; returns the chosen activity description for audit.
+  - `unlink_enquiry_from_campaign({ enquiryId })` — clears `CampaignActivityId`. Idempotent.
+  - `assign_enquiry({ enquiryId, assignedTo })` — sets/clears the owner. `assignedTo` accepts user code (e.g. `CL1`) or name (`Calvin Liesching`, `Calvin`) using the same `resolveUserCodes` helper as `create_task`. Pass `null` to unassign. `AssignedDate` is auto-populated by the server.
+- `create_enquiry` extended with `campaignId`, `campaignActivityId`, and `assignedTo` — so a bulk loader can create + link + assign in a single OData call. Resolution happens up-front so an unknown user / missing campaign aborts before the enquiry is written.
+- `update_enquiry` extended with `campaignActivityId` (number or `null`) and `assignedTo` (string or `null`) for in-place re-linking and re-assignment workflows.
+- Two new permission actions: `enquiries.link_campaign` (gates link/unlink) and `enquiries.assign` (gates `assign_enquiry`). Added to the [config/permissions.json](config/permissions.json) module catalog and granted to `DL`. Existing `create_enquiry` / `update_enquiry` continue to use `enquiries.create` / `enquiries.edit`; the new fields on those tools ride on the existing permission since they bundle naturally with the create/edit form (matches how the Prospect UI gates the same form).
+- `tools/reports.ts` now exports `resolveUserCodes` so the new module can share the same name→code resolution rules without duplication.
+
+### Verified
+Live round-trip against the WCG tenant on 2026-05-08:
+- Test enquiry created → `link_enquiry_to_campaign(testId, 1039)` → `Enquiries?$filter=CampaignActivityId eq 1037` count went from 1 → 2; the link expanded correctly to campaign 1039 / activity 1037 ("Schools & Academies Show May 2026").
+- `assign_enquiry(testId, "CL1")` → `AssignedTo: "CL1"`, `AssignedToUser.UserName: "Calvin Liesching"`, `AssignedDate` server-populated.
+- `unlink_enquiry_from_campaign(testId)` → count back to 1; `AssignedTo` persisted (independent fields, as expected).
+- Test enquiry deleted; tenant data restored to baseline.
+- `Enquiry.CampaignActivityId` and `Enquiry.AssignedTo` are flagged `meta:UpdateVisibility="never"` in the OData metadata, but PATCH and POST both accept them — same misleading metadata pattern as `Notepad.ContactId` in v1.3.2. Documented in [src/tools/campaign-enquiry.ts](src/tools/campaign-enquiry.ts).
+
 ## [1.3.2] - 2026-05-08
 ### Fixed
 - **Permission gating ignored `~/.prospect-crm/config.json`.** `src/index.ts` was reading `process.env.PROSPECT_USER_ID` directly to identify the current user, bypassing the credential loader that already merges env vars with the file written by `setup-user.ps1`/`setup.cjs`. On installs that wired credentials via the file (no `env` block in `claude_desktop_config.json` — the supported plugin-install path), USER_ID resolved to `""`, fell through to `defaults.writeAllow=""`, and every write tool reported "no <module> <action> permission" even for users with full grants. Now uses `loadCredentials().PROSPECT_USER_ID` so the file-based config works as documented. Repro: Dale's `claude_desktop_config.json` had no `env` block (set up via `setup-user.ps1`), `~/.prospect-crm/config.json` had `PROSPECT_USER_ID: "DL"`, but `create_division` / `create_contact` / `create_enquiry` / `create_task` all failed with permission errors. Verified post-fix: `loadCredentials()` returns `USER_ID: "DL"`, gating allows DL's granular create+edit permissions through.

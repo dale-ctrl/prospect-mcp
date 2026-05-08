@@ -17,7 +17,7 @@ let _userCache: { UserCode: string; UserName: string }[] | null = null;
  * Accepts "ML", "Miles Liesching", "Miles", "Liesching" etc.
  * Returns { codes: string[], resolved: Map<input, code> } or throws if any can't be matched.
  */
-async function resolveUserCodes(inputs: string[]): Promise<{ codes: string[]; display: string }> {
+export async function resolveUserCodes(inputs: string[]): Promise<{ codes: string[]; display: string }> {
   const client = getClient();
 
   if (!_userCache) {

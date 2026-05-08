@@ -42,7 +42,9 @@
         },
         "enquiries": {
           "create": true,
-          "edit": true
+          "edit": true,
+          "link_campaign": true,
+          "assign": true
         },
         "inventory": {
           "create": true,
@@ -151,7 +153,9 @@
       "description": "Inbound enquiries",
       "actions": [
         "create",
-        "edit"
+        "edit",
+        "link_campaign",
+        "assign"
       ]
     },
     {

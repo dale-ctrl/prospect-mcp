@@ -4,6 +4,7 @@
  */
 import { z } from "zod";
 import { getClient } from "../client.js";
+import { resolveCampaignAndOwnerFields } from "./campaign-enquiry.js";
 // ─── Schemas ──────────────────────────────────────────────────
 export const searchEnquiriesSchema = z.object({
     forename: z.string().optional().describe("Enquirer first name (partial match)"),
@@ -44,6 +45,9 @@ export const createEnquirySchema = z.object({
     addressLine3: z.string().optional().describe("Address line 3"),
     postcode: z.string().optional().describe("Postcode"),
     country: z.string().optional().describe("Country"),
+    campaignId: z.number().int().positive().optional().describe("Optional CampaignId to link the new enquiry to. Defaults the activity to the campaign's lowest-id activity unless campaignActivityId is also given."),
+    campaignActivityId: z.number().int().positive().optional().describe("Optional CampaignActivityId. Use alone (without campaignId) when you already know the activity, or with campaignId for explicit pairing."),
+    assignedTo: z.string().optional().describe("Owner — accepts user code (e.g. 'CL1') or name (e.g. 'Calvin Liesching', 'Calvin'). Sets the AssignedTo column at create time."),
 });
 export const updateEnquirySchema = z.object({
     enquiryId: z.number().describe("The EnquiryId to update"),
@@ -59,6 +63,8 @@ export const updateEnquirySchema = z.object({
     description: z.string().optional(),
     source: z.string().optional(),
     sourceTypeCode: z.string().optional(),
+    campaignActivityId: z.number().int().positive().nullable().optional().describe("Set or clear the CampaignActivityId. Pass null to unlink the enquiry from any campaign."),
+    assignedTo: z.string().nullable().optional().describe("Owner — code or name. Pass null to unassign. (For dedicated assignment workflows, prefer assign_enquiry.)"),
 });
 // ─── Handlers ─────────────────────────────────────────────────
 export async function createEnquiry(args) {
@@ -110,16 +116,36 @@ export async function createEnquiry(args) {
         body.Postcode = args.postcode;
     if (args.country !== undefined)
         body.Country = args.country;
+    // Resolve optional campaign + owner fields up-front so that an invalid
+    // campaign / unknown user fails the call before we POST a half-formed
+    // enquiry. resolveCampaignAndOwnerFields throws actionable errors that
+    // surface back to the LLM.
+    const extras = await resolveCampaignAndOwnerFields({
+        campaignId: args.campaignId,
+        campaignActivityId: args.campaignActivityId,
+        assignedTo: args.assignedTo,
+    });
+    Object.assign(body, extras.body);
     const created = await client.post("Enquiries", body);
     const name = `${created.Forename || args.forename || ""} ${created.Surname || args.surname || ""}`.trim();
-    return [
+    const lines = [
         `Enquiry created successfully!`,
         `**EnquiryId:** ${created.EnquiryId}`,
         `**Name:** ${name || "N/A"}`,
         `**Company:** ${created.CompanyName || args.companyName || "N/A"}`,
         `**Email:** ${created.Email || args.email || "N/A"}`,
         `**Source:** ${created.Source || args.source || "N/A"}`,
-    ].join("\n");
+    ];
+    if (extras.activity) {
+        lines.push(`**Campaign:** ${extras.activity.CampaignId} via activity ${extras.activity.CampaignActivityId}${extras.activity.Description ? ` ("${extras.activity.Description}")` : ""}`);
+    }
+    else if (extras.body.CampaignActivityId !== undefined) {
+        lines.push(`**Campaign Activity:** ${extras.body.CampaignActivityId}`);
+    }
+    if (extras.assignedDisplay) {
+        lines.push(`**Assigned to:** ${extras.assignedDisplay}`);
+    }
+    return lines.join("\n");
 }
 export async function updateEnquiry(args) {
     const client = getClient();
@@ -149,11 +175,31 @@ export async function updateEnquiry(args) {
         body.Source = fields.source;
     if (fields.sourceTypeCode !== undefined)
         body.SourceTypeCode = fields.sourceTypeCode;
+    // CampaignActivityId — accept null (clears the link) or a valid number.
+    if (fields.campaignActivityId !== undefined) {
+        body.CampaignActivityId = fields.campaignActivityId; // null is fine
+    }
+    // AssignedTo — null clears, string resolves via resolveUserCodes.
+    let assignedDisplay;
+    if (fields.assignedTo !== undefined) {
+        if (fields.assignedTo === null || fields.assignedTo === "") {
+            body.AssignedTo = null;
+            assignedDisplay = "(unassigned)";
+        }
+        else {
+            const extras = await resolveCampaignAndOwnerFields({ assignedTo: fields.assignedTo });
+            Object.assign(body, extras.body);
+            assignedDisplay = extras.assignedDisplay;
+        }
+    }
     if (Object.keys(body).length === 0) {
         return "No fields provided to update. Specify at least one field to change.";
     }
     await client.patch("Enquiries", enquiryId, body);
-    return `Enquiry #${enquiryId} updated successfully. Fields changed: ${Object.keys(body).join(", ")}`;
+    const summary = [`Enquiry #${enquiryId} updated. Fields changed: ${Object.keys(body).join(", ")}`];
+    if (assignedDisplay)
+        summary.push(`Assigned to: ${assignedDisplay}`);
+    return summary.join("\n");
 }
 export async function searchEnquiries(args) {
     const client = getClient();

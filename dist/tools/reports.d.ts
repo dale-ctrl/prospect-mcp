@@ -4,6 +4,15 @@
  * sets, and cross-reference to produce reports that OData alone can't do.
  */
 import { z } from "zod";
+/**
+ * Resolve a mix of user codes and names to user codes.
+ * Accepts "ML", "Miles Liesching", "Miles", "Liesching" etc.
+ * Returns { codes: string[], resolved: Map<input, code> } or throws if any can't be matched.
+ */
+export declare function resolveUserCodes(inputs: string[]): Promise<{
+    codes: string[];
+    display: string;
+}>;
 export declare const reportAccountsWithoutTasksSchema: z.ZodObject<{
     territoryDescription: z.ZodOptional<z.ZodString>;
     minEmployees: z.ZodDefault<z.ZodOptional<z.ZodNumber>>;
