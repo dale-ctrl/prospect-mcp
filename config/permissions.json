@@ -38,7 +38,9 @@
           "edit": true
         },
         "campaigns": {
-          "create": true
+          "create": true,
+          "add_contact": true,
+          "remove_contact": true
         },
         "enquiries": {
           "create": true,
@@ -144,7 +146,9 @@
       "label": "Campaigns",
       "description": "Marketing campaigns",
       "actions": [
-        "create"
+        "create",
+        "add_contact",
+        "remove_contact"
       ]
     },
     {

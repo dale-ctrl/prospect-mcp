@@ -6,6 +6,32 @@ The format is based on Keep a Changelog, and this project adheres to Semantic Ve
 
 ## [Unreleased]
 
+## [1.5.0] - 2026-05-08
+### Added
+Three additive features to finish the S&A Show 2026 lead-load workflow.
+
+- **Contact ↔ Campaign target-roster tools** — new module [src/tools/campaign-contacts.ts](src/tools/campaign-contacts.ts) backed by the OData `CampaignActivityContact` join entity (composite key `CampaignActivityId` + `ContactId`):
+  - `add_contact_to_campaign({ contactId, campaignId, campaignActivityId?, comments? })` — adds a contact to the target-contact roster on the activity. Defaults to the campaign's lowest-id activity when `campaignActivityId` is omitted. **Idempotent** — already-rostered contacts return a "no change" message rather than a duplicate-key error (the server itself is idempotent on duplicate POST, but we check first so the response is informative).
+  - `remove_contact_from_campaign({ contactId, campaignId, campaignActivityId? })` — opposite. Idempotent on already-removed contacts. Uses the composite-key DELETE URL form `/CampaignActivityContacts(CampaignActivityId=X,ContactId=Y)`.
+  - `list_campaign_contacts({ campaignId, campaignActivityId?, top? })` — read-only roster listing with full contact + division detail. Prefer this over `get_campaign_activity_contacts` for new code; the older tool selects `ResponseDate`/`ResponseCode` fields that don't exist on this entity (Prospect silently ignores them) — preserved for backwards compat.
+- **`update_contact` extended with `roleCode`.** Accepts the FK code (e.g. `b730fd`) OR a UI label / canonical role name (e.g. `SENCO`, `Bursar / Finance / SBM`); resolved against the live `ContactRoles` table via `resolveRoleCodeOrLabel` so a typo fails fast with the full role list rather than silently defaulting. Same field surface available on `create_contact`.
+- **Job-Title → Contact-Role auto-resolver** — new pure-function module [src/lib/role-mapper.ts](src/lib/role-mapper.ts). Eleven-rule WCG-agreed mapping table; rule order matters (SENCO > Head/Principal > Senior Teacher > … > default Office/Admin). Patterns are case-insensitive substring matches; `jobTitle` checked first, then `jobFunction`, falling through to `default-empty` / `default-no-match` when neither hits. Edge cases handled per spec: `"Senco/class teacher"` → SENCO; `"Head of Maths"` → Senior Teacher (rule 3 generic catch); `"Head of School"` → Head/Principal (rule 2 locked phrase); `"Headteacher and SENCO"` → SENCO (rule 1 priority). 21/21 unit tests pass — see [src/test-role-mapper.ts](src/test-role-mapper.ts), runnable via `npm run test:role-mapper`. Wired into:
+  - `create_contact` — auto-resolves when `roleCode` is omitted; uses `jobTitle` (and optional new `jobFunction` input) to pick a role. Success message includes the resolved code, label, and matched-rule diagnostic so callers can verify.
+  - `update_contact` — auto-resolves only when `roleCode` is NOT supplied AND `jobTitle` is being patched in this same call. Otherwise the existing role is left alone (no silent overwrite on unrelated edits).
+  - New read-only `resolve_contact_role({ jobTitle?, jobFunction? })` tool — dry-run preview that returns the role code, label, and matched-rule string without writing anything. Useful for the bulk loader to validate its mapping plan before firing creates, and for wash-up reporting.
+- **Permissions** — added `campaigns.add_contact` and `campaigns.remove_contact` to the [config/permissions.json](config/permissions.json) module catalog and granted to `DL`. Existing `update_contact`/`create_contact` continue under `contacts.edit`/`contacts.create` (the new role fields ride on the existing perms).
+
+### Verified
+Live round-trip against the WCG tenant on 2026-05-08:
+- Test contact added to campaign 1039 / activity 1037 via `add_contact_to_campaign`; verified via OData query and `list_campaign_contacts`. Re-add returned "no change" (idempotent). `remove_contact_from_campaign` cleared the row; second remove returned "no change".
+- `update_contact({ contactId, roleCode: "SENCO" })` patched a test contact's `RoleCode` from `271c0d` to `b730fd` — verified via `get_contact_details` follow-up. Reset to `271c0d` cleanly.
+- Role-mapper unit suite: **21 passed, 0 failed**.
+- Round-trip `create_contact({ jobTitle: "Senco/class teacher", divisionId: <test> })` (no `roleCode`) — response shows `Role: b730fd — SENCO` plus `Role auto-resolved via: rule-1-jobTitle:"senco"`.
+- All test data deleted; tenant restored to baseline.
+
+### Notes
+- `Enquiry.CampaignActivityId` and `CampaignActivityContact.CampaignActivityId/ContactId` are flagged `meta:UpdateVisibility="never"` in the OData metadata. POST accepts them anyway; PATCH on Enquiry too. Same misleading-metadata pattern as v1.3.2's `Notepad.ContactId` and v1.4.0's enquiry FKs. Documented in [src/tools/campaign-contacts.ts](src/tools/campaign-contacts.ts).
+
 ## [1.4.0] - 2026-05-08
 ### Added
 - **Enquiry ↔ Campaign linkage** and **Enquiry ownership** are now writable through the connector — addresses the gap where MCP-loaded enquiries didn't appear on a campaign's lead list and couldn't be assigned to a BDE programmatically. New module [src/tools/campaign-enquiry.ts](src/tools/campaign-enquiry.ts) backed by `Enquiry.CampaignActivityId` and `Enquiry.AssignedTo`.

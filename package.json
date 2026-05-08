@@ -1,6 +1,6 @@
 {
   "name": "prospect-crm-mcp",
-  "version": "1.4.0",
+  "version": "1.5.0",
   "description": "MCP server for Prospect365 CRM - Quote management for WCG",
   "type": "module",
   "main": "dist/index.js",
@@ -18,6 +18,7 @@
     "test:versa": "node --test dist/test-versa.js",
     "test:send-message": "node dist/test-send-message.js",
     "test:credentials": "node --test dist/test-credentials.js",
+    "test:role-mapper": "node --test dist/test-role-mapper.js",
     "enable-autoupdate": "node scripts/enable-autoupdate.cjs",
     "setup": "node scripts/setup.cjs"
   },

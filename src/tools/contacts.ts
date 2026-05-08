@@ -7,6 +7,7 @@
 import { z } from "zod";
 import { getClient } from "../client.js";
 import { resolveDropdownValue } from "./dropdowns.js";
+import { resolveContactRole, resolveRoleCodeOrLabel, type ResolvedRole } from "../lib/role-mapper.js";
 
 // ─── Schemas ───────────────────────────────────────────────────
 
@@ -89,9 +90,10 @@ export const createContactSchema = z.object({
   divisionId: z.number().describe("DivisionId (company) this contact belongs to. Use search_divisions to find, or create_division to create a new company first."),
   forename: z.string().describe("First name"),
   surname: z.string().describe("Last name"),
-  roleCode: z.string().optional().describe("Contact role code. Use get_contact_roles to list available codes. Defaults to 'Office / Admin' if omitted."),
+  roleCode: z.string().optional().describe("Contact role — accepts the FK code (e.g. 'b730fd') OR a UI label / canonical role name (e.g. 'SENCO', 'Bursar / Finance / SBM'). When omitted, the connector auto-resolves from jobTitle / jobFunction using the WCG role-mapping rules; falls back to 'Office / Admin'."),
   title: z.string().optional().describe("Title (Mr, Mrs, Ms, Dr, etc.)"),
-  jobTitle: z.string().optional().describe("Job title"),
+  jobTitle: z.string().optional().describe("Job title. Drives the auto role-resolver when roleCode is not supplied."),
+  jobFunction: z.string().optional().describe("Job function — secondary input to the auto role-resolver. Tried after jobTitle. Not stored separately on the Contact."),
   department: z.string().optional().describe("Department"),
   email: z.string().optional().describe("Email address"),
   phoneNumber: z.string().optional().describe("Phone number"),
@@ -105,13 +107,15 @@ export const updateContactSchema = z.object({
   forename: z.string().optional(),
   surname: z.string().optional(),
   title: z.string().optional(),
-  jobTitle: z.string().optional(),
+  jobTitle: z.string().optional().describe("Job title. When patched without an explicit roleCode, the connector also auto-resolves the role via the WCG mapping rules. Pass roleCode explicitly to keep the existing role."),
+  jobFunction: z.string().optional().describe("Job function — secondary input to the auto role-resolver, used only when jobTitle is being patched and roleCode isn't supplied."),
   department: z.string().optional(),
   email: z.string().optional(),
   phoneNumber: z.string().optional(),
   mobilePhoneNumber: z.string().optional(),
   salutation: z.string().optional(),
   source: z.string().optional(),
+  roleCode: z.string().optional().describe("Contact role — accepts the FK code (e.g. 'b730fd') OR a UI label (e.g. 'SENCO'). Explicit value wins over auto-resolution. Omit to leave the role unchanged unless jobTitle is also being patched (in which case auto-resolution kicks in)."),
 });
 
 export const updateDivisionSchema = z.object({
@@ -161,6 +165,11 @@ export const updateDivisionSchema = z.object({
 });
 
 export const getContactRolesSchema = z.object({});
+
+export const resolveContactRoleSchema = z.object({
+  jobTitle: z.string().nullable().optional().describe("Job title to map (case-insensitive substring match against the WCG rule table)."),
+  jobFunction: z.string().nullable().optional().describe("Job function — secondary input. Tried only if jobTitle yields no match."),
+});
 
 export const lookupCompanyInfoSchema = z.object({
   companyName: z.string().describe("Company name to search for online"),
@@ -389,14 +398,55 @@ export async function updateDivision(args: z.infer<typeof updateDivisionSchema>)
   return `Division #${divisionId} updated successfully. Fields changed: ${changedFields.join(", ")}`;
 }
 
+/**
+ * Resolve a caller-supplied roleCode (FK code OR UI label) to a canonical
+ * FK code, or return null on no match. Hits the API once per call to grab
+ * the live ContactRoles list (cheap; 11 rows on WCG tenant).
+ *
+ * Throws if the caller supplied a roleCode that doesn't match anything —
+ * better to fail fast than silently default to Office/Admin and obscure
+ * the typo.
+ */
+async function resolveExplicitRoleCode(input: string): Promise<{ code: string; label: string }> {
+  const client = getClient();
+  const result = await client.get<{ Code: string; Description: string | null }>(
+    "ContactRoles",
+    "$select=Code,Description&$filter=Obsolete eq 0",
+  );
+  const resolved = resolveRoleCodeOrLabel(input, result.value);
+  if (!resolved) {
+    const list = result.value
+      .map((r) => `  ${r.Code} — ${r.Description || "(no description)"}`)
+      .join("\n");
+    throw new Error(
+      `Unknown contact role: "${input}". Pass either the FK code or a label that matches one of:\n${list}`,
+    );
+  }
+  return resolved;
+}
+
 export async function createContact(args: z.infer<typeof createContactSchema>): Promise<string> {
   const client = getClient();
+
+  // Role resolution: explicit roleCode wins; otherwise auto-resolve from
+  // jobTitle / jobFunction; otherwise default to Office/Admin.
+  let resolvedRole: { code: string; label: string };
+  let autoResolution: ResolvedRole | null = null;
+  if (args.roleCode !== undefined && args.roleCode !== "") {
+    resolvedRole = await resolveExplicitRoleCode(args.roleCode);
+  } else {
+    autoResolution = resolveContactRole({
+      jobTitle: args.jobTitle ?? null,
+      jobFunction: args.jobFunction ?? null,
+    });
+    resolvedRole = { code: autoResolution.code, label: autoResolution.label };
+  }
 
   const body: Record<string, unknown> = {
     DivisionId: args.divisionId,
     Forename: args.forename,
     Surname: args.surname,
-    RoleCode: args.roleCode || DEFAULT_ROLE_CODE,
+    RoleCode: resolvedRole.code,
   };
 
   if (args.title !== undefined) body.Title = args.title;
@@ -410,7 +460,7 @@ export async function createContact(args: z.infer<typeof createContactSchema>): 
 
   const created = await client.post<Record<string, unknown>>("Contacts", body);
 
-  return [
+  const lines = [
     `Contact created successfully!`,
     `**ContactId:** ${created.ContactId}`,
     `**Name:** ${created.Forename || args.forename} ${created.Surname || args.surname}`,
@@ -418,9 +468,13 @@ export async function createContact(args: z.infer<typeof createContactSchema>): 
     `**Email:** ${created.Email || "N/A"}`,
     `**Phone:** ${created.PhoneNumber || "N/A"}`,
     `**Job Title:** ${created.JobTitle || "N/A"}`,
-    `**Role:** ${created.RoleCode}`,
-    `**CRM Link:** ${created.RecordLink || "N/A"}`,
-  ].join("\n");
+    `**Role:** ${resolvedRole.code} — ${resolvedRole.label}`,
+  ];
+  if (autoResolution) {
+    lines.push(`**Role auto-resolved via:** ${autoResolution.matchedRule}`);
+  }
+  lines.push(`**CRM Link:** ${created.RecordLink || "N/A"}`);
+  return lines.join("\n");
 }
 
 export async function updateContact(args: z.infer<typeof updateContactSchema>): Promise<string> {
@@ -439,13 +493,52 @@ export async function updateContact(args: z.infer<typeof updateContactSchema>): 
   if (fields.salutation !== undefined) body.Salutation = fields.salutation;
   if (fields.source !== undefined) body.Source = fields.source;
 
+  // Role resolution:
+  //   - Explicit roleCode wins outright.
+  //   - Otherwise, only auto-resolve when the caller is patching jobTitle
+  //     in this same call. Otherwise we'd silently overwrite the existing
+  //     role on every unrelated update — a footgun for bulk re-edits.
+  let roleSummary: { code: string; label: string; via: string } | null = null;
+  if (fields.roleCode !== undefined && fields.roleCode !== "") {
+    const r = await resolveExplicitRoleCode(fields.roleCode);
+    body.RoleCode = r.code;
+    roleSummary = { ...r, via: "explicit" };
+  } else if (fields.jobTitle !== undefined) {
+    const r = resolveContactRole({
+      jobTitle: fields.jobTitle ?? null,
+      jobFunction: fields.jobFunction ?? null,
+    });
+    body.RoleCode = r.code;
+    roleSummary = { code: r.code, label: r.label, via: r.matchedRule };
+  }
+
   if (Object.keys(body).length === 0) {
     return "No fields provided to update. Specify at least one field to change.";
   }
 
   await client.patch<Record<string, unknown>>("Contacts", contactId, body);
 
-  return `Contact #${contactId} updated successfully. Fields changed: ${Object.keys(body).join(", ")}`;
+  const summary = [`Contact #${contactId} updated. Fields changed: ${Object.keys(body).join(", ")}`];
+  if (roleSummary) {
+    summary.push(`Role set to ${roleSummary.code} — ${roleSummary.label} (via ${roleSummary.via}).`);
+  }
+  return summary.join("\n");
+}
+
+export async function resolveContactRoleHandler(
+  args: z.infer<typeof resolveContactRoleSchema>,
+): Promise<string> {
+  const r = resolveContactRole({
+    jobTitle: args.jobTitle ?? null,
+    jobFunction: args.jobFunction ?? null,
+  });
+  return [
+    `**Resolved role:** ${r.code} — ${r.label}`,
+    `**Matched rule:** ${r.matchedRule}`,
+    `**Inputs:** jobTitle=${JSON.stringify(args.jobTitle ?? null)}, jobFunction=${JSON.stringify(args.jobFunction ?? null)}`,
+    ``,
+    `_This is a dry-run preview — no record is written. Use create_contact / update_contact with the same inputs to actually apply._`,
+  ].join("\n");
 }
 
 export async function getContactRoles(): Promise<string> {

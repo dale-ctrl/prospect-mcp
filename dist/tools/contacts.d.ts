@@ -99,6 +99,7 @@ export declare const createContactSchema: z.ZodObject<{
     roleCode: z.ZodOptional<z.ZodString>;
     title: z.ZodOptional<z.ZodString>;
     jobTitle: z.ZodOptional<z.ZodString>;
+    jobFunction: z.ZodOptional<z.ZodString>;
     department: z.ZodOptional<z.ZodString>;
     email: z.ZodOptional<z.ZodString>;
     phoneNumber: z.ZodOptional<z.ZodString>;
@@ -114,6 +115,7 @@ export declare const createContactSchema: z.ZodObject<{
     source?: string | undefined;
     roleCode?: string | undefined;
     jobTitle?: string | undefined;
+    jobFunction?: string | undefined;
     department?: string | undefined;
     email?: string | undefined;
     mobilePhoneNumber?: string | undefined;
@@ -127,6 +129,7 @@ export declare const createContactSchema: z.ZodObject<{
     source?: string | undefined;
     roleCode?: string | undefined;
     jobTitle?: string | undefined;
+    jobFunction?: string | undefined;
     department?: string | undefined;
     email?: string | undefined;
     mobilePhoneNumber?: string | undefined;
@@ -138,12 +141,14 @@ export declare const updateContactSchema: z.ZodObject<{
     surname: z.ZodOptional<z.ZodString>;
     title: z.ZodOptional<z.ZodString>;
     jobTitle: z.ZodOptional<z.ZodString>;
+    jobFunction: z.ZodOptional<z.ZodString>;
     department: z.ZodOptional<z.ZodString>;
     email: z.ZodOptional<z.ZodString>;
     phoneNumber: z.ZodOptional<z.ZodString>;
     mobilePhoneNumber: z.ZodOptional<z.ZodString>;
     salutation: z.ZodOptional<z.ZodString>;
     source: z.ZodOptional<z.ZodString>;
+    roleCode: z.ZodOptional<z.ZodString>;
 }, "strip", z.ZodTypeAny, {
     contactId: number;
     title?: string | undefined;
@@ -151,7 +156,9 @@ export declare const updateContactSchema: z.ZodObject<{
     source?: string | undefined;
     forename?: string | undefined;
     surname?: string | undefined;
+    roleCode?: string | undefined;
     jobTitle?: string | undefined;
+    jobFunction?: string | undefined;
     department?: string | undefined;
     email?: string | undefined;
     mobilePhoneNumber?: string | undefined;
@@ -163,7 +170,9 @@ export declare const updateContactSchema: z.ZodObject<{
     source?: string | undefined;
     forename?: string | undefined;
     surname?: string | undefined;
+    roleCode?: string | undefined;
     jobTitle?: string | undefined;
+    jobFunction?: string | undefined;
     department?: string | undefined;
     email?: string | undefined;
     mobilePhoneNumber?: string | undefined;
@@ -246,6 +255,16 @@ export declare const updateDivisionSchema: z.ZodObject<{
     locale?: string | undefined;
 }>;
 export declare const getContactRolesSchema: z.ZodObject<{}, "strip", z.ZodTypeAny, {}, {}>;
+export declare const resolveContactRoleSchema: z.ZodObject<{
+    jobTitle: z.ZodOptional<z.ZodNullable<z.ZodString>>;
+    jobFunction: z.ZodOptional<z.ZodNullable<z.ZodString>>;
+}, "strip", z.ZodTypeAny, {
+    jobTitle?: string | null | undefined;
+    jobFunction?: string | null | undefined;
+}, {
+    jobTitle?: string | null | undefined;
+    jobFunction?: string | null | undefined;
+}>;
 export declare const lookupCompanyInfoSchema: z.ZodObject<{
     companyName: z.ZodString;
     website: z.ZodOptional<z.ZodString>;
@@ -260,6 +279,7 @@ export declare function createDivision(args: z.infer<typeof createDivisionSchema
 export declare function updateDivision(args: z.infer<typeof updateDivisionSchema>): Promise<string>;
 export declare function createContact(args: z.infer<typeof createContactSchema>): Promise<string>;
 export declare function updateContact(args: z.infer<typeof updateContactSchema>): Promise<string>;
+export declare function resolveContactRoleHandler(args: z.infer<typeof resolveContactRoleSchema>): Promise<string>;
 export declare function getContactRoles(): Promise<string>;
 export declare function lookupCompanyInfo(args: z.infer<typeof lookupCompanyInfoSchema>): Promise<string>;
 //# sourceMappingURL=contacts.d.ts.map

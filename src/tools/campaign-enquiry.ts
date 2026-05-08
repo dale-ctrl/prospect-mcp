@@ -27,13 +27,13 @@ import { resolveUserCodes } from "./reports.js";
 
 // ─── Helpers ──────────────────────────────────────────────────
 
-interface CampaignActivityRef {
+export interface CampaignActivityRef {
   CampaignActivityId: number;
   CampaignId: number;
   Description?: string | null;
 }
 
-async function loadCampaignActivities(campaignId: number): Promise<CampaignActivityRef[]> {
+export async function loadCampaignActivities(campaignId: number): Promise<CampaignActivityRef[]> {
   const client = getClient();
   const result = await client.get<CampaignActivityRef>(
     "CampaignActivities",
@@ -42,7 +42,7 @@ async function loadCampaignActivities(campaignId: number): Promise<CampaignActiv
   return result.value;
 }
 
-async function resolveCampaignActivity(
+export async function resolveCampaignActivity(
   campaignId: number,
   campaignActivityId: number | undefined,
 ): Promise<CampaignActivityRef> {

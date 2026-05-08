@@ -23,12 +23,12 @@
 import { z } from "zod";
 import { getClient } from "../client.js";
 import { resolveUserCodes } from "./reports.js";
-async function loadCampaignActivities(campaignId) {
+export async function loadCampaignActivities(campaignId) {
     const client = getClient();
     const result = await client.get("CampaignActivities", `$filter=CampaignId eq ${campaignId}&$select=CampaignActivityId,CampaignId,Description&$orderby=CampaignActivityId asc`);
     return result.value;
 }
-async function resolveCampaignActivity(campaignId, campaignActivityId) {
+export async function resolveCampaignActivity(campaignId, campaignActivityId) {
     const activities = await loadCampaignActivities(campaignId);
     if (activities.length === 0) {
         throw new Error(`Campaign ${campaignId} has no activities — cannot link an enquiry to it. ` +

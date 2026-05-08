@@ -27,7 +27,7 @@ import { searchQuotesSchema, searchQuotes, getQuoteSchema, getQuote, createQuote
 import { addQuoteLineSchema, addQuoteLine, updateQuoteLineSchema, updateQuoteLine, deleteQuoteLineSchema, deleteQuoteLine, } from "./tools/quote-lines.js";
 import { searchContactsSchema, searchContacts, searchProductsSchema, searchProducts, getProductDetailSchema, getProductDetail, searchDivisionsSchema, searchDivisions, listDivisionsSchema, listDivisions, getQuoteStatusesSchema, getQuoteStatuses, } from "./tools/lookups.js";
 import { getContactDetailsSchema, getContactDetails, getDivisionDetailsSchema, getDivisionDetails, getUsersSchema, getUsers, searchLeadsSchema, searchLeads, getLeadDetailsSchema, getLeadDetails, } from "./tools/extended.js";
-import { createDivisionSchema, createDivision, createContactSchema, createContact, updateContactSchema, updateContact, updateDivisionSchema, updateDivision, getContactRolesSchema, getContactRoles, lookupCompanyInfoSchema, lookupCompanyInfo, } from "./tools/contacts.js";
+import { createDivisionSchema, createDivision, createContactSchema, createContact, updateContactSchema, updateContact, updateDivisionSchema, updateDivision, getContactRolesSchema, getContactRoles, resolveContactRoleSchema, resolveContactRoleHandler, lookupCompanyInfoSchema, lookupCompanyInfo, } from "./tools/contacts.js";
 import { listDropdownOptionsSchema, listDropdownOptions, deleteDivisionSchema, deleteDivision, } from "./tools/dropdowns.js";
 import { getCompanySchema, getCompany, updateCompanySchema, updateCompany, listCompaniesSchema, listCompanies, } from "./tools/companies.js";
 import { inspectDivisionCategorisationPanelSchema, inspectDivisionCategorisationPanel, } from "./tools/inspect.js";
@@ -37,6 +37,7 @@ import { searchOpportunitiesSchema, searchOpportunities, getOpportunitySchema, g
 import { reportAccountsWithoutTasksSchema, reportAccountsWithoutTasks, searchTasksSchema, searchTasks, getTerritoriesSchema, getTerritories, reportDivisionSummarySchema, reportDivisionSummary, createTaskSchema, createTask, updateTaskSchema, updateTask, getTaskTypesSchema, getTaskTypes, } from "./tools/reports.js";
 import { searchEnquiriesSchema, searchEnquiries, getEnquirySchema, getEnquiry, createEnquirySchema, createEnquiry, updateEnquirySchema, updateEnquiry, } from "./tools/enquiries.js";
 import { linkEnquiryToCampaignSchema, linkEnquiryToCampaign, unlinkEnquiryFromCampaignSchema, unlinkEnquiryFromCampaign, assignEnquirySchema, assignEnquiry, } from "./tools/campaign-enquiry.js";
+import { addContactToCampaignSchema, addContactToCampaign, removeContactFromCampaignSchema, removeContactFromCampaign, listCampaignContactsSchema, listCampaignContacts, } from "./tools/campaign-contacts.js";
 import { searchDocumentsSchema, searchDocuments, getDocumentSchema, getDocument, getDocumentTypesSchema, getDocumentTypes, } from "./tools/documents.js";
 import { searchCampaignsSchema, searchCampaigns, getCampaignSchema, getCampaign, searchCampaignActivitiesSchema, searchCampaignActivities, getCampaignActivityContactsSchema, getCampaignActivityContacts, createCampaignSchema, createCampaign, } from "./tools/campaigns.js";
 import { searchOrdersSchema, searchOrders, getOrderSchema, getOrder, reportOrdersByDivisionSchema, reportOrdersByDivision, } from "./tools/orders.js";
@@ -223,6 +224,8 @@ const TOOL_PERMISSION_MAP = {
     create_contract: { module: "contracts", action: "create" },
     update_contract: { module: "contracts", action: "edit" },
     create_campaign: { module: "campaigns", action: "create" },
+    add_contact_to_campaign: { module: "campaigns", action: "add_contact" },
+    remove_contact_from_campaign: { module: "campaigns", action: "remove_contact" },
     create_enquiry: { module: "enquiries", action: "create" },
     update_enquiry: { module: "enquiries", action: "edit" },
     link_enquiry_to_campaign: { module: "enquiries", action: "link_campaign" },
@@ -686,6 +689,15 @@ server.tool("get_contact_roles", "List available contact role codes in Prospect 
         return { content: [{ type: "text", text: `Error: ${err.message}` }], isError: true };
     }
 });
+server.tool("resolve_contact_role", "Preview the WCG Job Title → Contact Role mapping for a given jobTitle (and optionally jobFunction) WITHOUT writing anything. Useful for dry-running a bulk lead-load mapping plan before firing creates, or for wash-up reporting. Returns the role code, label, and the matched-rule diagnostic string.", resolveContactRoleSchema.shape, async (args) => {
+    try {
+        const result = await resolveContactRoleHandler(resolveContactRoleSchema.parse(args));
+        return { content: [{ type: "text", text: result }] };
+    }
+    catch (err) {
+        return { content: [{ type: "text", text: `Error: ${err.message}` }], isError: true };
+    }
+});
 server.tool("lookup_company_info", "Look up publicly available information about a company before adding them to Prospect CRM. Returns guidance on what to search for — use your web search capability to find company details, then create_division and create_contact with the results.", lookupCompanyInfoSchema.shape, async (args) => {
     try {
         const result = await lookupCompanyInfo(lookupCompanyInfoSchema.parse(args));
@@ -810,6 +822,33 @@ server.tool("search_campaign_activities", "Search campaign activities. Filter by
 server.tool("get_campaign_activity_contacts", "List contacts targeted by a specific campaign activity, including their response status.", getCampaignActivityContactsSchema.shape, async (args) => {
     try {
         const result = await getCampaignActivityContacts(getCampaignActivityContactsSchema.parse(args));
+        return { content: [{ type: "text", text: result }] };
+    }
+    catch (err) {
+        return { content: [{ type: "text", text: `Error: ${err.message}` }], isError: true };
+    }
+});
+server.tool("list_campaign_contacts", "List the target-contact roster for a campaign activity. New in v1.5 — returns the actual CampaignActivityContacts join rows with full contact + division detail. Prefer this over get_campaign_activity_contacts (which selects fields the entity doesn't actually have).", listCampaignContactsSchema.shape, async (args) => {
+    try {
+        const result = await listCampaignContacts(listCampaignContactsSchema.parse(args));
+        return { content: [{ type: "text", text: result }] };
+    }
+    catch (err) {
+        return { content: [{ type: "text", text: `Error: ${err.message}` }], isError: true };
+    }
+});
+registerWriteTool("add_contact_to_campaign", "Add an existing contact onto a campaign activity's target-contact roster. Idempotent — already-rostered contacts return a 'no change' message rather than a duplicate-key error. Optional `comments` field tags the source of the import (visible in the Prospect UI roster).", addContactToCampaignSchema.shape, async (args) => {
+    try {
+        const result = await addContactToCampaign(addContactToCampaignSchema.parse(args));
+        return { content: [{ type: "text", text: result }] };
+    }
+    catch (err) {
+        return { content: [{ type: "text", text: `Error: ${err.message}` }], isError: true };
+    }
+});
+registerWriteTool("remove_contact_from_campaign", "Remove a contact from a campaign activity's target-contact roster. Idempotent — not-on-roster contacts return a 'no change' message rather than a 404.", removeContactFromCampaignSchema.shape, async (args) => {
+    try {
+        const result = await removeContactFromCampaign(removeContactFromCampaignSchema.parse(args));
         return { content: [{ type: "text", text: result }] };
     }
     catch (err) {

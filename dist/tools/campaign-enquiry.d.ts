@@ -21,11 +21,13 @@
  * the success message so the caller can see which was used.
  */
 import { z } from "zod";
-interface CampaignActivityRef {
+export interface CampaignActivityRef {
     CampaignActivityId: number;
     CampaignId: number;
     Description?: string | null;
 }
+export declare function loadCampaignActivities(campaignId: number): Promise<CampaignActivityRef[]>;
+export declare function resolveCampaignActivity(campaignId: number, campaignActivityId: number | undefined): Promise<CampaignActivityRef>;
 export declare const linkEnquiryToCampaignSchema: z.ZodObject<{
     enquiryId: z.ZodNumber;
     campaignId: z.ZodNumber;
@@ -83,5 +85,4 @@ export interface ResolvedCampaignAndOwner {
     activity?: CampaignActivityRef;
 }
 export declare function resolveCampaignAndOwnerFields(args: CampaignAndOwnerInputs): Promise<ResolvedCampaignAndOwner>;
-export {};
 //# sourceMappingURL=campaign-enquiry.d.ts.map
