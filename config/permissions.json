@@ -3,55 +3,8 @@
     "DL": {
       "name": "Dale Liesching",
       "pat": "1e31aaba5d97595abe216b1f14a0b029",
-      "writeAllow": "quotes,contacts,opportunities,tasks,problems,jobs,bookings,contracts,campaigns,enquiries,inventory,knowledge",
-      "permissions": {
-        "quotes": {
-          "create": true,
-          "edit": true
-        },
-        "contacts": {
-          "create": true,
-          "edit": true
-        },
-        "opportunities": {
-          "create": true,
-          "edit": true
-        },
-        "tasks": {
-          "create": true,
-          "edit": true
-        },
-        "problems": {
-          "create": true,
-          "edit": true
-        },
-        "jobs": {
-          "create": true,
-          "edit": true
-        },
-        "bookings": {
-          "create": true,
-          "edit": true
-        },
-        "contracts": {
-          "create": true,
-          "edit": true
-        },
-        "campaigns": {
-          "create": true
-        },
-        "enquiries": {
-          "create": true,
-          "edit": true
-        },
-        "inventory": {
-          "create": true,
-          "edit": true
-        },
-        "knowledge": {
-          "create": true
-        }
-      },
+      "writeAllow": "*",
+      "permissions": {},
       "notes": "Admin — full access + messaging opt-in for smoke testing"
     }
   },
