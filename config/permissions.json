@@ -2,7 +2,7 @@
   "users": {
     "DL": {
       "name": "Dale Liesching",
-      "pat": "",
+      "pat": "1e31aaba5d97595abe216b1f14a0b029",
       "writeAllow": "*",
       "permissions": {},
       "notes": "Admin — full access + messaging opt-in for smoke testing"
