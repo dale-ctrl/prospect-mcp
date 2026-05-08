@@ -54,23 +54,29 @@ function git(args, opts = {}) {
   });
 }
 
-// Pulls --rebase, stages ONLY config/permissions.json (never a wildcard add —
-// otherwise an in-progress dist/ rebuild or .env edit would be swept into the
-// commit), commits, pushes. Returns { pushed, ts } on success or surfaces the
-// underlying git error on failure.
+// Stages ONLY config/permissions.json (never a wildcard add — otherwise an
+// in-progress dist/ rebuild or .env edit would be swept into the commit),
+// commits, pulls --rebase to absorb concurrent admin edits from another
+// machine, then pushes. Returns { pushed, ts, noop } on success.
+//
+// Order matters: the save endpoint already wrote permissions.json before
+// calling this, so the file is sitting on disk as an unstaged change. If we
+// `git pull --rebase` first, git bails with "you have unstaged changes" and
+// nothing gets pushed (Dale hit this in v1.3.0). Committing first leaves the
+// working tree clean so rebase runs cleanly.
+//
+// If the rebase produces a real conflict (not just unstaged-changes — that's
+// already prevented by ordering), we `git rebase --abort` so the local
+// commit stays intact and the UI can offer a retry.
 async function commitAndPushPermissions() {
   const ts = new Date().toISOString();
 
-  // Pull-rebase first so concurrent admin edits from another machine don't
-  // turn this into a merge conflict at push time.
-  await git(["pull", "--rebase", "origin", "main"]);
-
-  // Precise add — only the file we just wrote. If this returns no-op
-  // (someone else already pushed the same content), git commit will fail
-  // with "nothing to commit"; treat that as a successful no-op push.
+  // Precise add — only the file we just wrote.
   await git(["add", "config/permissions.json"]);
 
-  // Did the staged content actually differ?
+  // Did the staged content actually differ from HEAD? If not, no commit
+  // needed. (Someone else may have already pushed the same content, or the
+  // admin clicked Save without actually changing anything.)
   let hasStagedChanges = false;
   try {
     await git(["diff", "--cached", "--quiet", "--exit-code", "config/permissions.json"]);
@@ -80,10 +86,29 @@ async function commitAndPushPermissions() {
   }
 
   if (!hasStagedChanges) {
+    // Still try to push in case a previous run committed but failed to push.
+    // If origin is already in sync, git push is a no-op.
+    try {
+      await git(["push", "origin", "main"]);
+    } catch {
+      // ignore — nothing local to send and origin may be ahead, that's fine
+    }
     return { pushed: true, ts, noop: true };
   }
 
   await git(["commit", "-m", `admin: update permissions [${ts}]`]);
+
+  // Now pull-rebase — working tree is clean because we just committed.
+  // If a concurrent admin edit from another machine produced a real conflict,
+  // abort the rebase and surface the error. The local commit is kept so
+  // the next retry won't lose the change; the admin can resolve manually.
+  try {
+    await git(["pull", "--rebase", "origin", "main"]);
+  } catch (rebaseErr) {
+    try { await git(["rebase", "--abort"]); } catch { /* nothing to abort */ }
+    throw new Error(`pull --rebase failed (local commit preserved for retry): ${rebaseErr.message}`);
+  }
+
   await git(["push", "origin", "main"]);
   return { pushed: true, ts, noop: false };
 }

@@ -6,6 +6,10 @@ The format is based on Keep a Changelog, and this project adheres to Semantic Ve
 
 ## [Unreleased]
 
+## [1.3.1] - 2026-05-08
+### Fixed
+- Admin portal save: reordered `commitAndPushPermissions()` so it commits the staged file BEFORE running `git pull --rebase`. The previous order (rebase → add → commit → push) bailed with "you have unstaged changes" because the save endpoint had already written `config/permissions.json` to disk before calling the helper. New order: `git add config/permissions.json` → check `git diff --cached --quiet` (early-return as no-op if unchanged) → `git commit` → `git pull --rebase origin main` → `git push origin main`. The rebase now runs against a clean working tree. If the rebase hits a real conflict (not the unstaged-changes false positive), the helper runs `git rebase --abort` so the local commit is preserved and the UI's Retry Push button can be used after the conflict is resolved manually. Repro: Dale's v1.3.0 admin save returned `pushed: false` with an unstaged-changes error; v1.3.1 makes the helper idempotent and re-runnable.
+
 ## [1.3.0] - 2026-05-08
 ### Added
 - **Centralised permissions store via GitHub.** `src/permissions.ts` introduces a three-layer loader: live fetch from `https://raw.githubusercontent.com/dale-ctrl/prospect-mcp/main/config/permissions.json` (5s timeout) → local cache at `~/.prospect-crm/permissions-cache.json` (atomic `*.tmp` + rename writes) → bundled `config/permissions.json` from the plugin install. Schema-validates each layer's parsed JSON; falls through on malformed input. Logs every fetch/cache attempt with timestamp and URL to MCP stderr. Offline and first-run-while-offline both keep working — the connector only fails if even the bundled file is missing. Override the URL via `PROSPECT_PERMISSIONS_URL` for forks of this plugin.
