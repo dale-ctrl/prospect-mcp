@@ -3,7 +3,7 @@
     "DL": {
       "name": "Dale Liesching",
       "pat": "1e31aaba5d97595abe216b1f14a0b029",
-      "writeAllow": "quotes,contacts,opportunities,tasks,problems,jobs,bookings,contracts,campaigns,enquiries,inventory,knowledge",
+      "writeAllow": "quotes,contacts,opportunities,tasks,problems,jobs,bookings,contracts,campaigns,enquiries,inventory,knowledge,notes",
       "permissions": {
         "quotes": {
           "create": true,
@@ -49,6 +49,9 @@
           "edit": true
         },
         "knowledge": {
+          "create": true
+        },
+        "notes": {
           "create": true
         }
       },
@@ -164,6 +167,14 @@
       "id": "knowledge",
       "label": "Knowledge Base",
       "description": "Quoting lessons and product notes",
+      "actions": [
+        "create"
+      ]
+    },
+    {
+      "id": "notes",
+      "label": "Activity Notes",
+      "description": "Activity-feed notes (Notepads) on divisions, contacts, leads, enquiries, and quotes",
       "actions": [
         "create"
       ]

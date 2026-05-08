@@ -6,6 +6,17 @@ The format is based on Keep a Changelog, and this project adheres to Semantic Ve
 
 ## [Unreleased]
 
+## [1.3.2] - 2026-05-08
+### Fixed
+- **Permission gating ignored `~/.prospect-crm/config.json`.** `src/index.ts` was reading `process.env.PROSPECT_USER_ID` directly to identify the current user, bypassing the credential loader that already merges env vars with the file written by `setup-user.ps1`/`setup.cjs`. On installs that wired credentials via the file (no `env` block in `claude_desktop_config.json` — the supported plugin-install path), USER_ID resolved to `""`, fell through to `defaults.writeAllow=""`, and every write tool reported "no <module> <action> permission" even for users with full grants. Now uses `loadCredentials().PROSPECT_USER_ID` so the file-based config works as documented. Repro: Dale's `claude_desktop_config.json` had no `env` block (set up via `setup-user.ps1`), `~/.prospect-crm/config.json` had `PROSPECT_USER_ID: "DL"`, but `create_division` / `create_contact` / `create_enquiry` / `create_task` all failed with permission errors. Verified post-fix: `loadCredentials()` returns `USER_ID: "DL"`, gating allows DL's granular create+edit permissions through.
+
+### Added
+- **Activity-feed notes** — new `notes` module exposing two tools backed by Prospect's `Notepads` entity:
+  - `create_activity_note({ objectType, objectId, text, dateTime?, pinned?, tags?, external?, visibility?, recallUser?, recallDateTime?, userCode? })` — creates a note attached to a division, contact, lead, enquiry, or quote. Parent FKs (`DivisionId`, `ContactId`, `EnquiryId`) are resolved from the target and set explicitly so the note rolls up to every relevant level of the activity feed (matches what the Prospect UI does on save). Validates the target exists before posting, so an invalid id fails fast rather than creating an orphan note.
+  - `search_activity_notes({ divisionId?, contactId?, enquiryId?, objectType?, objectId?, user?, pinnedOnly?, dateFrom?, dateTo?, top? })` — read tool to inspect existing notes by parent record, type, author, pinned status, or date range.
+- ObjectType codes verified live: lowercase `division`, `contact`, `lead`, `enquiry`, `quote`. Write-recipe documented in [src/tools/notes.ts](src/tools/notes.ts) — `UpdateVisibility="never"` in the metadata blocks PATCH, not POST, and the parent FK columns must be sent explicitly on create or the activity feed roll-up breaks.
+- `notes` module added to [config/permissions.json](config/permissions.json) catalog and granted to `DL`.
+
 ## [1.3.1] - 2026-05-08
 ### Fixed
 - Admin portal save: reordered `commitAndPushPermissions()` so it commits the staged file BEFORE running `git pull --rebase`. The previous order (rebase → add → commit → push) bailed with "you have unstaged changes" because the save endpoint had already written `config/permissions.json` to disk before calling the helper. New order: `git add config/permissions.json` → check `git diff --cached --quiet` (early-return as no-op if unchanged) → `git commit` → `git pull --rebase origin main` → `git push origin main`. The rebase now runs against a clean working tree. If the rebase hits a real conflict (not the unstaged-changes false positive), the helper runs `git rebase --abort` so the local commit is preserved and the UI's Retry Push button can be used after the conflict is resolved manually. Repro: Dale's v1.3.0 admin save returned `pushed: false` with an unstaged-changes error; v1.3.1 makes the helper idempotent and re-runnable.

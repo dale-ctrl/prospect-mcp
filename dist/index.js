@@ -21,7 +21,7 @@
  */
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
-import { getClient } from "./client.js";
+import { getClient, loadCredentials } from "./client.js";
 // Tool schemas and handlers
 import { searchQuotesSchema, searchQuotes, getQuoteSchema, getQuote, createQuoteSchema, createQuote, updateQuoteSchema, updateQuote, duplicateQuoteSchema, duplicateQuote, addQuoteLineGroupSchema, addQuoteLineGroup, deleteQuoteSchema, deleteQuote, } from "./tools/quotes.js";
 import { addQuoteLineSchema, addQuoteLine, updateQuoteLineSchema, updateQuoteLine, deleteQuoteLineSchema, deleteQuoteLine, } from "./tools/quote-lines.js";
@@ -45,6 +45,7 @@ import { searchJobsSchema, searchJobs, getJobSchema, getJob, createJobSchema, cr
 import { searchInventoriesSchema, searchInventories, getInventorySchema, getInventory, } from "./tools/inventories.js";
 import { searchContractsSchema, searchContracts, getContractSchema, getContract, searchContractSchedulesSchema, searchContractSchedules, createContractSchema, createContract, updateContractSchema, updateContract, getContractLookupsSchema, getContractLookups, } from "./tools/contracts.js";
 import { searchActivityFeedSchema, searchActivityFeed, searchSpokeHistorySchema, searchSpokeHistory, searchRecallsSchema, searchRecalls, } from "./tools/activity.js";
+import { createActivityNoteSchema, createActivityNote, searchActivityNotesSchema, searchActivityNotes, } from "./tools/notes.js";
 import { getTagsSchema, getTags, searchTagAssignmentsSchema, searchTagAssignments, } from "./tools/tags.js";
 import { getPriceBandsSchema, getPriceBands, getPriceBandProductPricesSchema, getPriceBandProductPrices, searchPriceListSchema, searchPriceList, getProductPricingSchema, getProductPricing, } from "./tools/pricing.js";
 import { getContactExtrasSchema, getContactExtras, } from "./tools/contact-extras.js";
@@ -125,8 +126,24 @@ await refreshPermissionsSnapshot();
 if (cachedConfig) {
     console.error(`Loaded permissions: remote=${PERMISSIONS_PATHS.remoteUrl} cache=${PERMISSIONS_PATHS.cachePath}`);
 }
-// Current user identity — set once at launch via env var.
-const USER_ID = (process.env.PROSPECT_USER_ID || "").toUpperCase();
+// Current user identity — resolved through the same credential loader the
+// HTTP client uses (env var first, then ~/.prospect-crm/config.json written
+// by setup-user.ps1 / setup.cjs). Reading process.env directly here was a
+// bug: plugin installs that wrote the user code into the config file but
+// have no env block in claude_desktop_config.json got "" back, fell through
+// to defaults.writeAllow="", and saw every write tool blocked as read-only.
+const USER_ID = (() => {
+    try {
+        return (loadCredentials().PROSPECT_USER_ID || "").toUpperCase();
+    }
+    catch {
+        // loadCredentials throws when PAT is missing entirely. The MCP server
+        // can't function without a PAT anyway — fail later in the HTTP client
+        // with its actionable error rather than crashing here. Return "" so
+        // permission gating treats the user as unknown.
+        return "";
+    }
+})();
 function resolveWriteAllow() {
     const cfg = readCentralConfig();
     // 1. Check central config for this user
@@ -212,6 +229,7 @@ const TOOL_PERMISSION_MAP = {
     save_quoting_lesson: { module: "knowledge", action: "create" },
     save_product_note: { module: "knowledge", action: "create" },
     send_quote_email: { module: "messaging", action: "send" },
+    create_activity_note: { module: "notes", action: "create" },
 };
 // Modules whose actions have external, user-visible side effects (e.g. sending
 // real email via Prospect's merge-and-send). These must be opted into explicitly
@@ -948,6 +966,25 @@ server.tool("search_spoke_history", "Search communication history (spoke records
 server.tool("search_recalls", "Search recall/follow-up reminders for contacts or leads. Filter by user, date range, or find overdue recalls. Useful for checking who needs follow-up.", searchRecallsSchema.shape, async (args) => {
     try {
         const result = await searchRecalls(searchRecallsSchema.parse(args));
+        return { content: [{ type: "text", text: result }] };
+    }
+    catch (err) {
+        return { content: [{ type: "text", text: `Error: ${err.message}` }], isError: true };
+    }
+});
+// ─── Activity Notes (Notepad) Tools ───────────────────────────
+server.tool("search_activity_notes", "Search activity-feed notes (Notepads) attached to divisions, contacts, leads, enquiries, or quotes. Filter by division, contact, enquiry, object type/id, author, pinned-only, or date range. Use this before adding a new note to avoid duplicates.", searchActivityNotesSchema.shape, async (args) => {
+    try {
+        const result = await searchActivityNotes(searchActivityNotesSchema.parse(args));
+        return { content: [{ type: "text", text: result }] };
+    }
+    catch (err) {
+        return { content: [{ type: "text", text: `Error: ${err.message}` }], isError: true };
+    }
+});
+registerWriteTool("create_activity_note", "Create an activity-feed note (Notepad) on a division, contact, lead, enquiry, or quote. Provide objectType + objectId + text. Parent FKs (DivisionId, ContactId, EnquiryId) are resolved automatically so the note appears at the right level of the activity feed. Optional: pinned, tags, recallUser+recallDateTime for follow-up reminders.", createActivityNoteSchema.shape, async (args) => {
+    try {
+        const result = await createActivityNote(createActivityNoteSchema.parse(args));
         return { content: [{ type: "text", text: result }] };
     }
     catch (err) {
