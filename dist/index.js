@@ -59,70 +59,71 @@ import { sendQuoteEmailSchema, sendQuoteEmail, getMergeOutputSchema, getMergeOut
 /**
  * Write permissions system.
  *
- * Permissions are loaded from config/permissions.json (central admin file on NAS).
- * The current user is identified by PROSPECT_USER_ID env var (their CRM user code).
+ * Permissions are loaded by `src/permissions.ts` with a three-layer fallback:
+ * remote (raw.githubusercontent.com) → local cache → bundled defaults. This
+ * makes the admin portal a global control plane: when the admin saves +
+ * pushes a change, every Claude Desktop user picks it up on next restart
+ * without reinstalling the plugin.
  *
- * Fallback chain:
- *   1. Central config (config/permissions.json) keyed by PROSPECT_USER_ID
+ * The current user is identified by PROSPECT_USER_ID env var (their CRM user
+ * code).
+ *
+ * Per-user resolution chain inside the loaded snapshot:
+ *   1. Central config user entry keyed by PROSPECT_USER_ID
  *   2. Environment variables (PROSPECT_WRITE_ALLOW, PROSPECT_READ_ONLY) — backwards compatible
- *   3. Default permissions from the central config
+ *   3. Central config `defaults` block
  *
  * Available modules:
  *   quotes, contacts, opportunities, tasks, problems, jobs,
- *   bookings, contracts, campaigns, enquiries, inventory, knowledge
+ *   bookings, contracts, campaigns, enquiries, inventory, knowledge,
+ *   messaging
  */
-import { readFileSync, existsSync } from "fs";
-import { join, dirname } from "path";
-import { fileURLToPath } from "url";
-const __indexFilename = fileURLToPath(import.meta.url);
-const __indexDirname = dirname(__indexFilename);
-const PERMISSIONS_FILE = join(__indexDirname, "..", "config", "permissions.json");
-// ── Hot-reloading permissions cache ──────────────────────────
+import { loadPermissions, PERMISSIONS_PATHS } from "./permissions.js";
+// ── Hot-reloading permissions snapshot ───────────────────────
 //
-// `config/permissions.json` is re-read on each write-tool invocation if the
-// in-memory copy is older than PERMISSIONS_TTL_MS. Admin-portal edits on
-// Dale's machine become effective for every connected user within one TTL
-// window — no Claude Desktop restart needed.
+// The loader (remote → cache → bundled) is invoked once at startup, then
+// re-invoked in the background whenever a permission check happens after the
+// TTL has elapsed. Tool calls never block on the network — they always read
+// the in-memory snapshot. Admin-portal edits propagate to every connected
+// user within one Claude Desktop restart (admin pushes to GitHub on save,
+// every plugin fetches from GitHub at startup).
 //
-// If a reload fails (e.g. transient NAS hiccup), the previous cached config
-// is kept so gating doesn't flap to open/closed on a single bad read.
+// If a refresh fails entirely, the previous cached snapshot is kept so
+// gating doesn't flap to open/closed on a single bad fetch.
 const PERMISSIONS_TTL_MS = 5_000;
 let cachedConfig = null;
 let cachedConfigLoadedAt = 0;
-let cachedConfigJson = "";
+let refreshInFlight = false;
+async function refreshPermissionsSnapshot() {
+    if (refreshInFlight)
+        return;
+    refreshInFlight = true;
+    try {
+        cachedConfig = await loadPermissions();
+    }
+    catch (err) {
+        console.error(`[permissions] refresh failed entirely (${err.message}) — keeping prior snapshot`);
+    }
+    finally {
+        cachedConfigLoadedAt = Date.now();
+        refreshInFlight = false;
+    }
+}
 function readCentralConfig() {
     const now = Date.now();
     if (cachedConfig && now - cachedConfigLoadedAt < PERMISSIONS_TTL_MS) {
         return cachedConfig;
     }
-    try {
-        if (!existsSync(PERMISSIONS_FILE)) {
-            cachedConfigLoadedAt = now;
-            return cachedConfig; // keep prior cache if any
-        }
-        const raw = readFileSync(PERMISSIONS_FILE, "utf-8");
-        if (raw !== cachedConfigJson) {
-            const parsed = JSON.parse(raw);
-            if (cachedConfigJson !== "") {
-                console.error(`Permissions reloaded from ${PERMISSIONS_FILE}`);
-            }
-            cachedConfig = parsed;
-            cachedConfigJson = raw;
-        }
-        cachedConfigLoadedAt = now;
-        return cachedConfig;
-    }
-    catch (err) {
-        console.error(`Warning: Could not read permissions file: ${err.message} — keeping prior cached state.`);
-        cachedConfigLoadedAt = now; // don't retry every call on a broken file
-        return cachedConfig;
-    }
+    // Kick off non-blocking background refresh; return current snapshot meanwhile.
+    void refreshPermissionsSnapshot();
+    return cachedConfig;
 }
-// Prime the cache at startup so the first log line happens once, not per-request.
-{
-    const cfg = readCentralConfig();
-    if (cfg)
-        console.error(`Loaded permissions from ${PERMISSIONS_FILE}`);
+// Prime the snapshot at startup so the McpServer description below is built
+// against the live permissions, not against nothing. Top-level await blocks
+// the module here for at most FETCH_TIMEOUT_MS (5s) on initial load.
+await refreshPermissionsSnapshot();
+if (cachedConfig) {
+    console.error(`Loaded permissions: remote=${PERMISSIONS_PATHS.remoteUrl} cache=${PERMISSIONS_PATHS.cachePath}`);
 }
 // Current user identity — set once at launch via env var.
 const USER_ID = (process.env.PROSPECT_USER_ID || "").toUpperCase();

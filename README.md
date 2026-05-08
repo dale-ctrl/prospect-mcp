@@ -220,6 +220,41 @@ Sends a real email to the quote's primary contact and saves the source DOCX to `
 
 Implementation details + why earlier approaches silently no-opped: [src/tools/MESSAGING-NOTES.md](src/tools/MESSAGING-NOTES.md).
 
+## How permissions sync works
+
+This plugin uses a centralised permissions model. The canonical
+`config/permissions.json` lives on GitHub at:
+
+  https://raw.githubusercontent.com/dale-ctrl/prospect-mcp/main/config/permissions.json
+
+Whenever the admin portal saves a permissions change, the change is
+committed and pushed to this repo. Each user's plugin fetches the live
+file at MCP startup (i.e. when Claude Desktop starts).
+
+So the lifecycle is:
+
+1. Admin opens the admin portal at `http://localhost:3333/` (on the
+   maintainer's machine).
+2. Admin edits permissions and clicks **Save**.
+3. The admin portal writes the local file, commits, and pushes to GitHub.
+4. Team members see the new permissions the next time they restart
+   Claude Desktop.
+
+If a user is offline or GitHub is unreachable at startup, the plugin
+falls back to its locally cached copy (`~/.prospect-crm/permissions-cache.json`)
+of the last-known-good permissions, then to the bundled defaults from the
+plugin install. The user gets a warning in their MCP logs but the connector
+continues to function.
+
+Override the permissions URL with the `PROSPECT_PERMISSIONS_URL`
+environment variable if you fork this plugin and host your own
+permissions file elsewhere. Defaults to the GitHub raw URL above.
+
+If the admin portal's push fails (network down, missing git
+credentials, merge conflict), the local file is still saved and the UI
+surfaces a **Retry Push** button. Other users will not pick up the
+change until the push succeeds.
+
 ## Development
 
 Code lives on the NAS share. To make changes:

@@ -241,24 +241,72 @@ async function saveConfig() {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(config, null, 2),
     });
-    if (!resp.ok) throw new Error('Save failed');
-    showStatus('Permissions saved. Users will pick up changes on next Claude Desktop restart.', 'success');
-  } catch {
+    const data = await resp.json().catch(() => ({}));
+    if (!resp.ok || !data.saved) {
+      throw new Error(data.error || 'Save failed');
+    }
+    if (data.pushed) {
+      const noop = data.noop ? ' (no-op — already in sync)' : '';
+      showStatus(`Permissions saved and pushed to GitHub at ${data.ts}${noop}. Users pick up changes on next Claude Desktop restart.`, 'success');
+    } else {
+      // Local save succeeded, push failed — surface and offer retry.
+      showPushFailed(data.error || 'unknown push error', data.hint || '');
+    }
+  } catch (err) {
+    // Server unreachable / 4xx / etc — fall back to download.
     const blob = new Blob([JSON.stringify(config, null, 2)], { type: 'application/json' });
     const a = document.createElement('a');
     a.href = URL.createObjectURL(blob);
     a.download = 'permissions.json';
     a.click();
-    showStatus('Downloaded permissions.json — copy to Z:\\prospect-mcp\\config\\ to apply.', 'success');
+    showStatus(`Save failed (${err.message}). Downloaded permissions.json — copy to Z:\\prospect-mcp\\config\\ to apply manually.`, 'error');
   }
 }
 
+async function retryPushPermissions() {
+  showStatus('Retrying push to GitHub…', 'success');
+  try {
+    const resp = await fetch('/api/retry-push-permissions', { method: 'POST' });
+    const data = await resp.json().catch(() => ({}));
+    if (!resp.ok || !data.success) {
+      throw new Error(data.error || `HTTP ${resp.status}`);
+    }
+    const noop = data.noop ? ' (no-op — already in sync)' : '';
+    showStatus(`Push succeeded at ${data.ts}${noop}. Users pick up changes on next Claude Desktop restart.`, 'success');
+  } catch (err) {
+    showPushFailed(err.message, '');
+  }
+}
+
+function showPushFailed(error, hint) {
+  const el = document.getElementById('status');
+  el.className = 'status-bar error';
+  el.style.display = 'block';
+  // Replace contents with rich HTML including a retry button. Keep it visible
+  // (no auto-hide timer) until the user dismisses it via retry or save again.
+  el.innerHTML = `
+    <div style="display:flex;align-items:center;justify-content:center;gap:12px;flex-wrap:wrap;">
+      <span><strong>Saved locally, but push to GitHub failed:</strong> ${escapeHtml(error)}</span>
+      <button class="primary" style="padding:4px 12px;" onclick="retryPushPermissions()">Retry Push</button>
+    </div>
+    ${hint ? `<div style="font-size:11px;margin-top:4px;opacity:0.85;">${escapeHtml(hint)}</div>` : ''}
+  `;
+  // Cancel any existing auto-hide timer.
+  if (statusHideTimer) { clearTimeout(statusHideTimer); statusHideTimer = null; }
+}
+
+function escapeHtml(s) {
+  return String(s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+}
+
+let statusHideTimer = null;
 function showStatus(msg, type) {
   const el = document.getElementById('status');
   el.textContent = msg;
   el.className = 'status-bar ' + type;
   el.style.display = 'block';
-  setTimeout(() => el.style.display = 'none', 6000);
+  if (statusHideTimer) clearTimeout(statusHideTimer);
+  statusHideTimer = setTimeout(() => { el.style.display = 'none'; statusHideTimer = null; }, 6000);
 }
 
 // ─── Render user list ─────────────────────────────────────────
