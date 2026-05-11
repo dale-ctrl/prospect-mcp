@@ -6,6 +6,7 @@
 import { z } from "zod";
 export declare const createDivisionSchema: z.ZodObject<{
     name: z.ZodString;
+    companyId: z.ZodOptional<z.ZodNumber>;
     phoneNumber: z.ZodOptional<z.ZodString>;
     website: z.ZodOptional<z.ZodString>;
     relationship: z.ZodOptional<z.ZodString>;
@@ -50,6 +51,7 @@ export declare const createDivisionSchema: z.ZodObject<{
     priorityId?: number | undefined;
     turnoverId?: string | undefined;
     sector?: string | undefined;
+    companyId?: number | undefined;
     phoneNumber?: string | undefined;
     website?: string | undefined;
     salesLedgerId?: string | undefined;
@@ -79,6 +81,7 @@ export declare const createDivisionSchema: z.ZodObject<{
     priorityId?: number | undefined;
     turnoverId?: string | undefined;
     sector?: string | undefined;
+    companyId?: number | undefined;
     phoneNumber?: string | undefined;
     website?: string | undefined;
     salesLedgerId?: string | undefined;
@@ -180,6 +183,7 @@ export declare const updateContactSchema: z.ZodObject<{
 }>;
 export declare const updateDivisionSchema: z.ZodObject<{
     divisionId: z.ZodNumber;
+    companyId: z.ZodOptional<z.ZodNumber>;
     name: z.ZodOptional<z.ZodString>;
     phoneNumber: z.ZodOptional<z.ZodString>;
     website: z.ZodOptional<z.ZodString>;
@@ -220,6 +224,7 @@ export declare const updateDivisionSchema: z.ZodObject<{
     turnoverId?: string | undefined;
     sector?: string | undefined;
     name?: string | undefined;
+    companyId?: number | undefined;
     phoneNumber?: string | undefined;
     website?: string | undefined;
     salesLedgerId?: string | undefined;
@@ -245,6 +250,7 @@ export declare const updateDivisionSchema: z.ZodObject<{
     turnoverId?: string | undefined;
     sector?: string | undefined;
     name?: string | undefined;
+    companyId?: number | undefined;
     phoneNumber?: string | undefined;
     website?: string | undefined;
     salesLedgerId?: string | undefined;

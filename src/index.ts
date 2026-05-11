@@ -137,6 +137,16 @@ import {
 } from "./tools/campaign-contacts.js";
 
 import {
+  deleteTaskSchema, deleteTask,
+  deleteEnquirySchema, deleteEnquiry,
+  deleteActivityNoteSchema, deleteActivityNote,
+  deleteContactSchema, deleteContact,
+  mergeDivisionSchema, mergeDivision,
+  moveContactSchema, moveContact,
+  reparentDivisionSchema, reparentDivision,
+} from "./tools/cleanup.js";
+
+import {
   searchDocumentsSchema, searchDocuments,
   getDocumentSchema, getDocument,
   getDocumentTypesSchema, getDocumentTypes,
@@ -461,6 +471,13 @@ const TOOL_PERMISSION_MAP: Record<string, { module: string; action: string }> = 
   create_campaign: { module: "campaigns", action: "create" },
   add_contact_to_campaign: { module: "campaigns", action: "add_contact" },
   remove_contact_from_campaign: { module: "campaigns", action: "remove_contact" },
+  delete_task: { module: "tasks", action: "delete" },
+  delete_enquiry: { module: "enquiries", action: "delete" },
+  delete_activity_note: { module: "notes", action: "delete" },
+  delete_contact: { module: "contacts", action: "delete" },
+  merge_division: { module: "divisions", action: "merge" },
+  move_contact: { module: "contacts", action: "move" },
+  reparent_division: { module: "divisions", action: "reparent" },
   create_enquiry: { module: "enquiries", action: "create" },
   update_enquiry: { module: "enquiries", action: "edit" },
   link_enquiry_to_campaign: { module: "enquiries", action: "link_campaign" },
@@ -2037,8 +2054,31 @@ server.tool("report_account_financials", "Complete financial overview for a divi
 
 // ─── Final: Division Update ──────────────────────────────────
 
-registerWriteTool("update_division", "Update a division/company — change name, phone, website, employee count, territory, relationship, or notes.", updateDivisionSchema.shape,
+registerWriteTool("update_division", "Update a division/company — change name, phone, website, employee count, territory, relationship, notes, etc. New in v1.6: pass companyId to re-parent the Division under a different Company (e.g. a MAT Trust). For dedicated reparenting workflows prefer reparent_division — separately permissioned via divisions.reparent.", updateDivisionSchema.shape,
   async (args) => { try { const result = await updateDivision(updateDivisionSchema.parse(args)); return { content: [{ type: "text" as const, text: result }] }; } catch (err) { return { content: [{ type: "text" as const, text: `Error: ${(err as Error).message}` }], isError: true }; } });
+
+// ─── Cleanup + hierarchy tools (v1.6.0) ───────────────────────
+
+registerWriteTool("delete_task", "Soft-delete a task (StatusFlag → 'D'). Idempotent — already-deleted tasks return a 'no change' message. Hard-delete is not exposed via the OData API.", deleteTaskSchema.shape,
+  async (args) => { try { const result = await deleteTask(deleteTaskSchema.parse(args)); return { content: [{ type: "text" as const, text: result }] }; } catch (err) { return { content: [{ type: "text" as const, text: `Error: ${(err as Error).message}` }], isError: true }; } });
+
+registerWriteTool("delete_enquiry", "Soft-delete an enquiry. REFUSES if the enquiry has been converted to a Lead/Opportunity (handle the downstream Lead first). Idempotent on already-deleted enquiries.", deleteEnquirySchema.shape,
+  async (args) => { try { const result = await deleteEnquiry(deleteEnquirySchema.parse(args)); return { content: [{ type: "text" as const, text: result }] }; } catch (err) { return { content: [{ type: "text" as const, text: `Error: ${(err as Error).message}` }], isError: true }; } });
+
+registerWriteTool("delete_activity_note", "Soft-delete a Notepad row. Idempotent — already-deleted or missing notes return a 'no change' message rather than a 404.", deleteActivityNoteSchema.shape,
+  async (args) => { try { const result = await deleteActivityNote(deleteActivityNoteSchema.parse(args)); return { content: [{ type: "text" as const, text: result }] }; } catch (err) { return { content: [{ type: "text" as const, text: `Error: ${(err as Error).message}` }], isError: true }; } });
+
+registerWriteTool("delete_contact", "Soft-delete a contact. REFUSES with a listing if the contact has any active Quotes, Leads, or Tasks (StatusFlag != 'D') — protects against orphaning live sales activity. Resolve the dependents first (close, delete, or reassign), then re-try.", deleteContactSchema.shape,
+  async (args) => { try { const result = await deleteContact(deleteContactSchema.parse(args)); return { content: [{ type: "text" as const, text: result }] }; } catch (err) { return { content: [{ type: "text" as const, text: `Error: ${(err as Error).message}` }], isError: true }; } });
+
+registerWriteTool("merge_division", "Merge two Divisions: PATCH every active child record (Contacts, Tasks, Enquiries, Leads, Quotes, division-bound Notepads) from source → target. Returns a per-entity move summary. With deleteSource=true the source Division is soft-deleted afterwards (only when every child moved cleanly). Failed individual moves are listed in the response — they don't abort the rest of the merge.", mergeDivisionSchema.shape,
+  async (args) => { try { const result = await mergeDivision(mergeDivisionSchema.parse(args)); return { content: [{ type: "text" as const, text: result }] }; } catch (err) { return { content: [{ type: "text" as const, text: `Error: ${(err as Error).message}` }], isError: true }; } });
+
+registerWriteTool("move_contact", "Move a single Contact (and its Tasks/Notepads with stale DivisionId) to a target Division. Validates source/target. Idempotent if already on the target.", moveContactSchema.shape,
+  async (args) => { try { const result = await moveContact(moveContactSchema.parse(args)); return { content: [{ type: "text" as const, text: result }] }; } catch (err) { return { content: [{ type: "text" as const, text: `Error: ${(err as Error).message}` }], isError: true }; } });
+
+registerWriteTool("reparent_division", "Re-parent a Division under a different Company (Trust/group). Validates the target Company exists and isn't deleted. Idempotent if already under that Company. Single-purpose tool gated separately via divisions.reparent — the same field exists on update_division for callers with broader contacts.edit grants.", reparentDivisionSchema.shape,
+  async (args) => { try { const result = await reparentDivision(reparentDivisionSchema.parse(args)); return { content: [{ type: "text" as const, text: result }] }; } catch (err) { return { content: [{ type: "text" as const, text: `Error: ${(err as Error).message}` }], isError: true }; } });
 
 // ─── Final: Product Catalogue ────────────────────────────────
 

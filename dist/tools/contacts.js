@@ -10,6 +10,7 @@ import { resolveContactRole, resolveRoleCodeOrLabel } from "../lib/role-mapper.j
 // ─── Schemas ───────────────────────────────────────────────────
 export const createDivisionSchema = z.object({
     name: z.string().describe("Company/organisation name"),
+    companyId: z.number().int().positive().optional().describe("Optional CompanyId of an existing parent Company (e.g. a Trust). When set, the new Division is attached to that Company instead of creating a fresh one. Useful for adding MAT-member schools under their Trust's Company. Validates the target Company exists."),
     phoneNumber: z.string().optional().describe("Main phone number"),
     website: z.string().optional().describe("Company website URL"),
     relationship: z.string().optional().describe("Relationship type, e.g. 'Customer', 'Prospect', 'Supplier'"),
@@ -96,6 +97,7 @@ export const updateContactSchema = z.object({
 });
 export const updateDivisionSchema = z.object({
     divisionId: z.number().describe("The DivisionId to update"),
+    companyId: z.number().int().positive().optional().describe("Re-parent this Division under a different Company (Trust/group). Validates the target Company exists. Use this for MAT-member schools that should sit under their Trust."),
     name: z.string().optional().describe("Company name"),
     phoneNumber: z.string().optional().describe("Phone number"),
     website: z.string().optional().describe("Website URL"),
@@ -217,12 +219,30 @@ export async function createDivision(args) {
     // Prospect hierarchy: Company → Division → Contact. The Prospect API does
     // NOT auto-create a parent Company — we explicitly POST one first. Without
     // this step the Division POST 400s on missing CompanyId.
-    // Step 1: Create the Company (requires Name + TypeId "CUS" for customer)
-    const company = await client.post("Companies", {
-        Name: args.name,
-        TypeId: "CUS",
-    });
-    const companyId = company.CompanyId;
+    //
+    // v1.6.0: when args.companyId is supplied, skip the Company-create step
+    // and attach the new Division to that existing Company. This is how
+    // MAT-member schools sit under a Trust's Company rather than getting a
+    // fresh single-company Company alongside.
+    let companyId;
+    let attachedToExistingCompany = false;
+    if (args.companyId !== undefined) {
+        // Validate the target Company exists and isn't deleted.
+        const target = await client.getById("Companies", args.companyId, "$select=CompanyId,Name,StatusFlag");
+        if (target.StatusFlag === "D") {
+            throw new Error(`Target CompanyId ${args.companyId} is deleted — cannot attach a new Division to it.`);
+        }
+        companyId = args.companyId;
+        attachedToExistingCompany = true;
+    }
+    else {
+        // Step 1: Create the Company (requires Name + TypeId "CUS" for customer)
+        const company = await client.post("Companies", {
+            Name: args.name,
+            TypeId: "CUS",
+        });
+        companyId = company.CompanyId;
+    }
     // Step 2: Create the Division under the Company. customerType / customDropdown*
     // are NOT included — those go to the linked DivisionXtra row in step 4.
     const divBody = {
@@ -280,8 +300,10 @@ export async function createDivision(args) {
         await patchDivisionXtraDropdowns(divisionId, xtraBody);
     }
     return [
-        `Company and division created successfully!`,
-        `**CompanyId:** ${companyId}`,
+        attachedToExistingCompany
+            ? `Division created and attached to existing Company ${companyId}.`
+            : `Company and Division created successfully!`,
+        `**CompanyId:** ${companyId}${attachedToExistingCompany ? " (existing — re-used)" : " (newly created)"}`,
         `**DivisionId:** ${divisionId}`,
         `**Name:** ${division.Name || args.name}`,
         `**AddressId:** ${addressId}`,
@@ -324,6 +346,15 @@ export async function updateDivision(args) {
         body.LongDescription = fields.longDescription;
     if (fields.locale !== undefined)
         body.Locale = fields.locale;
+    if (fields.companyId !== undefined) {
+        // Validate the target Company exists and isn't deleted before we PATCH —
+        // Prospect's PATCH would otherwise return a misleading 500.
+        const target = await client.getById("Companies", fields.companyId, "$select=CompanyId,StatusFlag");
+        if (target.StatusFlag === "D") {
+            throw new Error(`Target CompanyId ${fields.companyId} is deleted — cannot re-parent to it.`);
+        }
+        body.CompanyId = fields.companyId;
+    }
     await applyDivisionStandardFields(body, fields);
     const xtraBody = await buildDivisionXtraDropdownBody(fields);
     if (Object.keys(body).length === 0 && !xtraBody) {

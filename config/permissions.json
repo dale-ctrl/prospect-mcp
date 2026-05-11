@@ -3,7 +3,7 @@
     "DL": {
       "name": "Dale Liesching",
       "pat": "1e31aaba5d97595abe216b1f14a0b029",
-      "writeAllow": "quotes,contacts,opportunities,tasks,problems,jobs,bookings,contracts,campaigns,enquiries,inventory,knowledge,notes",
+      "writeAllow": "quotes,contacts,opportunities,tasks,problems,jobs,bookings,contracts,campaigns,enquiries,inventory,knowledge,notes,divisions",
       "permissions": {
         "quotes": {
           "create": true,
@@ -11,7 +11,9 @@
         },
         "contacts": {
           "create": true,
-          "edit": true
+          "edit": true,
+          "delete": true,
+          "move": true
         },
         "opportunities": {
           "create": true,
@@ -19,7 +21,8 @@
         },
         "tasks": {
           "create": true,
-          "edit": true
+          "edit": true,
+          "delete": true
         },
         "problems": {
           "create": true,
@@ -45,6 +48,7 @@
         "enquiries": {
           "create": true,
           "edit": true,
+          "delete": true,
           "link_campaign": true,
           "assign": true
         },
@@ -56,7 +60,12 @@
           "create": true
         },
         "notes": {
-          "create": true
+          "create": true,
+          "delete": true
+        },
+        "divisions": {
+          "merge": true,
+          "reparent": true
         }
       },
       "notes": "Admin — full access + messaging opt-in for smoke testing"
@@ -84,7 +93,9 @@
       "description": "Contacts and divisions",
       "actions": [
         "create",
-        "edit"
+        "edit",
+        "delete",
+        "move"
       ]
     },
     {
@@ -102,7 +113,8 @@
       "description": "Tasks and follow-ups",
       "actions": [
         "create",
-        "edit"
+        "edit",
+        "delete"
       ]
     },
     {
@@ -158,6 +170,7 @@
       "actions": [
         "create",
         "edit",
+        "delete",
         "link_campaign",
         "assign"
       ]
@@ -184,7 +197,17 @@
       "label": "Activity Notes",
       "description": "Activity-feed notes (Notepads) on divisions, contacts, leads, enquiries, and quotes",
       "actions": [
-        "create"
+        "create",
+        "delete"
+      ]
+    },
+    {
+      "id": "divisions",
+      "label": "Division Hierarchy",
+      "description": "Division-level cleanup operations: re-parent under a different Company, merge duplicate Divisions onto a canonical one. The standard create/edit/delete on divisions sits under the contacts module — this one is just for hierarchy moves.",
+      "actions": [
+        "merge",
+        "reparent"
       ]
     },
     {

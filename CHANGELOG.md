@@ -6,6 +6,44 @@ The format is based on Keep a Changelog, and this project adheres to Semantic Ve
 
 ## [Unreleased]
 
+## [1.6.0] - 2026-05-11
+### Added
+Cleanup + Division-hierarchy tools — driven by the post-S&A Show 2026 dataset cleanup. New module [src/tools/cleanup.ts](src/tools/cleanup.ts).
+
+#### Soft-delete tools
+All four use Prospect's standard pattern: `DELETE /<EntitySet>(id)` flips `StatusFlag` from `A` → `D`. The row stays in the database; the Prospect UI excludes `StatusFlag='D'` from default views. Hard-delete is not exposed via OData.
+
+- `delete_task({ taskId })` — idempotent on already-deleted tasks.
+- `delete_enquiry({ enquiryId })` — REFUSES if the enquiry has been converted (`ConvertedDate` populated or `LeadId` non-null), so a delete can't strand the downstream Lead/Opportunity. Idempotent.
+- `delete_activity_note({ noteId })` — idempotent on already-deleted or missing notes.
+- `delete_contact({ contactId })` — REFUSES with a per-entity listing (Quote IDs / Lead IDs / Task IDs, up to 5 each) if the contact has any active dependents. Forces the caller to resolve them first; no `force` override (clean up the dependents or use the Prospect UI).
+
+#### Division hierarchy
+`Division.CompanyId` is the parent FK; metadata flags it `meta:UpdateVisibility="never"` but POST and PATCH both accept it (same misleading-metadata pattern this codebase keeps hitting — Notepad FKs in v1.3.2, Enquiry FKs in v1.4.0, CampaignActivityContact in v1.5.0). Verified live.
+
+- `create_division` extended with optional `companyId` — when supplied, the new Division attaches to that existing Company (validates it exists and isn't deleted). Without it, the existing two-step Company-then-Division flow runs unchanged. Use this to add MAT-member schools under their Trust's Company in one call instead of getting a redundant Company alongside.
+- `update_division` extended with optional `companyId` — re-parent in place. Validates target Company.
+- `reparent_division({ divisionId, companyId })` — single-purpose reparent tool, gated separately via `divisions.reparent`. Same field exists on `update_division` for callers with broader `contacts.edit` grants; the dedicated tool is for narrowly-scoped reparent workflows.
+- `merge_division({ sourceDivisionId, targetDivisionId, deleteSource? })` — moves every active child record from source → target via PATCH on each child's `DivisionId` (Contacts, Tasks, Enquiries, Leads, Quotes, plus division-bound Notepads which also re-stamp their `ObjectId`). Returns a per-entity move summary with failure listing. The OData metadata declares a bound `Merge` action on Division but its signature doesn't expose a target parameter; manual orchestration is the supported path. With `deleteSource: true`, soft-deletes the source Division — but only when every child moved cleanly. Failed moves are listed in the response and don't abort the rest of the merge (so a typoed Quote ID doesn't strand 137 contacts).
+- `move_contact({ contactId, targetDivisionId })` — moves a single Contact and re-stamps any Tasks/Notepads whose own `DivisionId` column pointed at the old Division (those would otherwise show under the wrong division on the activity feed). Idempotent if already on the target.
+
+#### Permissions
+New actions added to [config/permissions.json](config/permissions.json) catalog and granted to `DL`:
+- `tasks.delete`, `enquiries.delete`, `notes.delete`, `contacts.delete`
+- `contacts.move` (gates `move_contact`)
+- New `divisions` module with `merge` (gates `merge_division`) and `reparent` (gates `reparent_division`). Standard create/edit/delete on Divisions continues to live under the `contacts` module — the new module is hierarchy-only.
+
+`tasks.update` was already covered by the existing `tasks.edit` permission; no extension needed.
+
+### Verified
+Live round-trip against the WCG tenant — **23/23 assertions passed**. See [scripts/verify-1.6.0.mjs](scripts/verify-1.6.0.mjs).
+
+- Soft-delete confirmed on Task, Enquiry, Notepad, Contact, Division — all flip `StatusFlag` `A` → `D` via `DELETE`.
+- PATCH confirmed to honour `Division.CompanyId`, `Contact.DivisionId`, `Task.TaskTypeId`, `Task.AssignedTo`, despite metadata's `UpdateVisibility="never"` flag on each.
+- `merge_division`: contact + task + division-bound note all moved from source to target; source soft-deleted afterwards. Side-observation: Prospect auto-cascades `Task.DivisionId` when its parent `Contact.DivisionId` changes — our explicit Task loop sees `0 moved` because the cascade already ran during the Contacts pass. The result is correct (the Task ends up on the target); just noted so the move-summary isn't surprising.
+- `reparent_division`, `create_division({ companyId })`, `update_task`, `delete_task`, `delete_contact` (clean + blocked + unblocked), `move_contact` (with contact-owned task re-stamping), `delete_enquiry`, `delete_activity_note` (all idempotent paths included).
+- All test records cleaned up; tenant returned to baseline.
+
 ## [1.5.0] - 2026-05-08
 ### Added
 Three additive features to finish the S&A Show 2026 lead-load workflow.
