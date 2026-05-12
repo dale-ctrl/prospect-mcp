@@ -147,6 +147,10 @@ import {
 } from "./tools/cleanup.js";
 
 import {
+  updateDivisionAddressSchema, updateDivisionAddress,
+} from "./tools/division-address.js";
+
+import {
   searchDocumentsSchema, searchDocuments,
   getDocumentSchema, getDocument,
   getDocumentTypesSchema, getDocumentTypes,
@@ -478,6 +482,7 @@ const TOOL_PERMISSION_MAP: Record<string, { module: string; action: string }> = 
   merge_division: { module: "divisions", action: "merge" },
   move_contact: { module: "contacts", action: "move" },
   reparent_division: { module: "divisions", action: "reparent" },
+  update_division_address: { module: "divisions", action: "update_address" },
   create_enquiry: { module: "enquiries", action: "create" },
   update_enquiry: { module: "enquiries", action: "edit" },
   link_enquiry_to_campaign: { module: "enquiries", action: "link_campaign" },
@@ -2079,6 +2084,20 @@ registerWriteTool("move_contact", "Move a single Contact (and its Tasks/Notepads
 
 registerWriteTool("reparent_division", "Re-parent a Division under a different Company (Trust/group). Validates the target Company exists and isn't deleted. Idempotent if already under that Company. Single-purpose tool gated separately via divisions.reparent — the same field exists on update_division for callers with broader contacts.edit grants.", reparentDivisionSchema.shape,
   async (args) => { try { const result = await reparentDivision(reparentDivisionSchema.parse(args)); return { content: [{ type: "text" as const, text: result }] }; } catch (err) { return { content: [{ type: "text" as const, text: `Error: ${(err as Error).message}` }], isError: true }; } });
+
+registerWriteTool(
+  "update_division_address",
+  "Update the registered address on a Division. Patches the linked Address entity (resolved via Division.AddressId, falling back to Division.MainAddressId). Only fields supplied are changed; unspecified fields are preserved. Empty string (\"\") explicitly clears a line — useful for removing stale data. Idempotent. Pass divisionId (preferred — resolves AddressId automatically) or addressId directly if known. On WCG: addressLine3 = town/city, addressLine4 = county. Foreign postcodes and countries accepted as-is.",
+  updateDivisionAddressSchema.shape,
+  async (args) => {
+    try {
+      const result = await updateDivisionAddress(args);
+      return { content: [{ type: "text" as const, text: result }] };
+    } catch (err) {
+      return { content: [{ type: "text" as const, text: `Error: ${(err as Error).message}` }], isError: true };
+    }
+  },
+);
 
 // ─── Final: Product Catalogue ────────────────────────────────
 

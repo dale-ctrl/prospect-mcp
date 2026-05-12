@@ -6,6 +6,22 @@ The format is based on Keep a Changelog, and this project adheres to Semantic Ve
 
 ## [Unreleased]
 
+## [1.7.0] - 2026-05-12
+### Added
+- `update_division_address` tool — patches the Address entity linked from the Division. Resolves AddressId from divisionId automatically. Mirrors the cross-entity-updater pattern used by `update_division_versa_maintenance`. Only fields supplied are patched; empty string explicitly clears a line; whitespace is trimmed. Foreign postcodes and countries pass through as-is. New file [src/tools/division-address.ts](src/tools/division-address.ts).
+
+### Tenant-shape divergence from the spec
+The original change brief instructed resolving the linked Address via `Division.MainAddressId`. On the WCG tenant `MainAddressId` is **null on every active Division** sampled (15/15 in a live spot-check). The populated column is `Division.AddressId`. The handler tries `AddressId` first then falls back to `MainAddressId`, so it works on both tenant layouts without the caller needing to know which. Flagged here so the same assumption isn't carried forward into v1.8+.
+
+### Why
+The 138-lead SA Show 2026 import in May 2026 left 42 newly-created Divisions with empty or partial addresses (bulk-create script regressed midway). Until now there was no way to repair them programmatically because `update_division` doesn't expose address fields. With this tool, the staged fixes in `outputs/sa-show-2026/address_fix_staging.json` can be applied via bulk `update_division_address` calls.
+
+### Permission
+New action `divisions.update_address` added to the [config/permissions.json](config/permissions.json) catalog and granted to `DL`. Sits under the existing `divisions` hierarchy module alongside `merge` and `reparent`. (The brief proposed `divisions.update.address` as a three-part dotted key; the repo's permission system is module.action two-part throughout, so it landed as `divisions.update_address` to stay consistent with neighbours like `campaigns.add_contact`, `enquiries.link_campaign`.)
+
+### Verified
+Live round-trip against the WCG tenant — see [scripts/verify-1.7.0.mjs](scripts/verify-1.7.0.mjs). All scenarios from the spec passed: happy path with divisionId, happy path with addressId, no-fields-supplied no-op, empty-string clear, partial-update preservation, whitespace trim, foreign country, no-AddressId-link error, neither-input rejection.
+
 ## [1.6.0] - 2026-05-11
 ### Added
 Cleanup + Division-hierarchy tools — driven by the post-S&A Show 2026 dataset cleanup. New module [src/tools/cleanup.ts](src/tools/cleanup.ts).

@@ -65,7 +65,8 @@
         },
         "divisions": {
           "merge": true,
-          "reparent": true
+          "reparent": true,
+          "update_address": true
         }
       },
       "notes": "Admin — full access + messaging opt-in for smoke testing"
@@ -204,10 +205,11 @@
     {
       "id": "divisions",
       "label": "Division Hierarchy",
-      "description": "Division-level cleanup operations: re-parent under a different Company, merge duplicate Divisions onto a canonical one. The standard create/edit/delete on divisions sits under the contacts module — this one is just for hierarchy moves.",
+      "description": "Division-level cleanup operations: re-parent under a different Company, merge duplicate Divisions onto a canonical one, patch the linked Address. The standard create/edit/delete on divisions sits under the contacts module — this one is for cross-entity Division moves.",
       "actions": [
         "merge",
-        "reparent"
+        "reparent",
+        "update_address"
       ]
     },
     {

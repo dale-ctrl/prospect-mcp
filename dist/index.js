@@ -39,6 +39,7 @@ import { searchEnquiriesSchema, searchEnquiries, getEnquirySchema, getEnquiry, c
 import { linkEnquiryToCampaignSchema, linkEnquiryToCampaign, unlinkEnquiryFromCampaignSchema, unlinkEnquiryFromCampaign, assignEnquirySchema, assignEnquiry, } from "./tools/campaign-enquiry.js";
 import { addContactToCampaignSchema, addContactToCampaign, removeContactFromCampaignSchema, removeContactFromCampaign, listCampaignContactsSchema, listCampaignContacts, } from "./tools/campaign-contacts.js";
 import { deleteTaskSchema, deleteTask, deleteEnquirySchema, deleteEnquiry, deleteActivityNoteSchema, deleteActivityNote, deleteContactSchema, deleteContact, mergeDivisionSchema, mergeDivision, moveContactSchema, moveContact, reparentDivisionSchema, reparentDivision, } from "./tools/cleanup.js";
+import { updateDivisionAddressSchema, updateDivisionAddress, } from "./tools/division-address.js";
 import { searchDocumentsSchema, searchDocuments, getDocumentSchema, getDocument, getDocumentTypesSchema, getDocumentTypes, } from "./tools/documents.js";
 import { searchCampaignsSchema, searchCampaigns, getCampaignSchema, getCampaign, searchCampaignActivitiesSchema, searchCampaignActivities, getCampaignActivityContactsSchema, getCampaignActivityContacts, createCampaignSchema, createCampaign, } from "./tools/campaigns.js";
 import { searchOrdersSchema, searchOrders, getOrderSchema, getOrder, reportOrdersByDivisionSchema, reportOrdersByDivision, } from "./tools/orders.js";
@@ -234,6 +235,7 @@ const TOOL_PERMISSION_MAP = {
     merge_division: { module: "divisions", action: "merge" },
     move_contact: { module: "contacts", action: "move" },
     reparent_division: { module: "divisions", action: "reparent" },
+    update_division_address: { module: "divisions", action: "update_address" },
     create_enquiry: { module: "enquiries", action: "create" },
     update_enquiry: { module: "enquiries", action: "edit" },
     link_enquiry_to_campaign: { module: "enquiries", action: "link_campaign" },
@@ -1465,6 +1467,15 @@ registerWriteTool("reparent_division", "Re-parent a Division under a different C
 catch (err) {
     return { content: [{ type: "text", text: `Error: ${err.message}` }], isError: true };
 } });
+registerWriteTool("update_division_address", "Update the registered address on a Division. Patches the linked Address entity (resolved via Division.AddressId, falling back to Division.MainAddressId). Only fields supplied are changed; unspecified fields are preserved. Empty string (\"\") explicitly clears a line — useful for removing stale data. Idempotent. Pass divisionId (preferred — resolves AddressId automatically) or addressId directly if known. On WCG: addressLine3 = town/city, addressLine4 = county. Foreign postcodes and countries accepted as-is.", updateDivisionAddressSchema.shape, async (args) => {
+    try {
+        const result = await updateDivisionAddress(args);
+        return { content: [{ type: "text", text: result }] };
+    }
+    catch (err) {
+        return { content: [{ type: "text", text: `Error: ${err.message}` }], isError: true };
+    }
+});
 // ─── Final: Product Catalogue ────────────────────────────────
 server.tool("get_product_categories", "List all product categories in the catalogue. Use with search_products_by_category to browse products.", getProductCategoriesSchema.shape, async (args) => { try {
     const result = await getProductCategories(getProductCategoriesSchema.parse(args));
