@@ -9,6 +9,7 @@ import type {
   Lead,
   LeadCreate,
   LeadStatus,
+  LeadStatusDetail,
   LeadSize,
   LeadSource,
   LeadType,
@@ -24,6 +25,12 @@ export const searchOpportunitiesSchema = z.object({
   divisionName: z.string().optional().describe("Company/division name (partial match)"),
   salesPersonId: z.string().optional().describe("Salesperson user code, e.g. 'DL'"),
   statusDescription: z.string().optional().describe("Status description, e.g. 'Qualified', 'Proposal'"),
+  statusDetail: z
+    .string()
+    .optional()
+    .describe(
+      "Status Detail label (partial match, e.g. 'Uncompetitive') or exact StatusDetailId code. Use get_lead_lookups(kind='statusDetails') to see the list."
+    ),
   pipelineId: z.string().optional().describe("Pipeline code to filter by"),
   dateFrom: z.string().optional().describe("Created on or after (ISO date)"),
   dateTo: z.string().optional().describe("Created on or before (ISO date)"),
@@ -77,7 +84,7 @@ export const updateOpportunitySchema = z.object({
 
 export const getLeadLookupsSchema = z.object({
   kind: z
-    .enum(["statuses", "sizes", "sources", "types", "pipelines", "all"])
+    .enum(["statuses", "statusDetails", "sizes", "sources", "types", "pipelines", "all"])
     .optional()
     .default("all")
     .describe("Which lookup table to fetch (default: all)"),
@@ -92,7 +99,7 @@ export async function searchOpportunities(
   const client = getClient();
   const filters: string[] = [];
   const expand =
-    "Contact($select=Forename,Surname;$expand=Division($select=Name)),Status($select=Description),SalesPerson($select=UserName),Pipeline($select=Description)";
+    "Contact($select=Forename,Surname;$expand=Division($select=Name)),Status($select=Description),StatusDetail($select=Code,Description),SalesPerson($select=UserName),Pipeline($select=Description)";
 
   if (args.description) filters.push(`contains(Description,'${args.description}')`);
   if (args.contactName) {
@@ -103,6 +110,13 @@ export async function searchOpportunities(
   if (args.divisionName) filters.push(`contains(Contact/Division/Name,'${args.divisionName}')`);
   if (args.salesPersonId) filters.push(`SalesPersonId eq '${args.salesPersonId}'`);
   if (args.statusDescription) filters.push(`contains(Status/Description,'${args.statusDescription}')`);
+  if (args.statusDetail) {
+    // Match on label (partial) OR exact code so callers can pass either.
+    const escaped = args.statusDetail.replace(/'/g, "''");
+    filters.push(
+      `(contains(StatusDetail/Description,'${escaped}') or StatusDetailId eq '${escaped}')`
+    );
+  }
   if (args.pipelineId) filters.push(`PipelineId eq '${args.pipelineId}'`);
   if (args.dateFrom) filters.push(`Created ge ${args.dateFrom}`);
   if (args.dateTo) filters.push(`Created le ${args.dateTo}`);
@@ -127,13 +141,15 @@ export async function searchOpportunities(
     const contact = l.Contact ? `${l.Contact.Forename || ""} ${l.Contact.Surname || ""}`.trim() : "N/A";
     const company = l.Contact?.Division?.Name || "N/A";
     const status = l.Status?.Description || "Unknown";
+    const detailLabel = l.StatusDetail?.Description || (l.StatusDetailId ? l.StatusDetailId : null);
+    const statusCol = detailLabel ? `${status} (${detailLabel})` : status;
     const pipeline = l.Pipeline?.Description || "—";
     const salesperson = l.SalesPerson?.UserName || l.SalesPersonId || "N/A";
 
     return [
       `**Opportunity #${l.LeadId}** — ${l.Description || "(no description)"}`,
       `  Company: ${company} | Contact: ${contact}`,
-      `  Status: ${status} | Pipeline: ${pipeline} | Salesperson: ${salesperson}`,
+      `  Status: ${statusCol} | Pipeline: ${pipeline} | Salesperson: ${salesperson}`,
       `  Value: £${l.Value?.toFixed(2) ?? "0.00"} | Weighted: £${l.WeightedValue?.toFixed(2) ?? "0.00"} | Confidence: ${l.Guttometer ?? 0}%`,
       `  Est. Close: ${l.EstimatedClose?.substring(0, 10) || "N/A"} | Created: ${l.Created?.substring(0, 10) || "N/A"}`,
       `  Link: ${l.RecordLink || "N/A"}`,
@@ -148,6 +164,7 @@ export async function getOpportunity(args: z.infer<typeof getOpportunitySchema>)
   const expand = [
     "Contact($select=ContactId,Forename,Surname,Email,PhoneNumber;$expand=Division($select=DivisionId,Name,SalesLedgerId))",
     "Status($select=Code,Description)",
+    "StatusDetail($select=Code,Description)",
     "Size($select=Code,Description)",
     "Source($select=Code,Description)",
     "Type($select=Code,Description)",
@@ -162,10 +179,14 @@ export async function getOpportunity(args: z.infer<typeof getOpportunitySchema>)
   const company = lead.Contact?.Division?.Name || "N/A";
   const accountCode = lead.Contact?.Division?.SalesLedgerId || "N/A";
 
+  const detailLabel = lead.StatusDetail?.Description || (lead.StatusDetailId ?? "—");
+  const detailCode = lead.StatusDetailId ?? "—";
+
   return [
     `# Opportunity #${lead.LeadId}`,
     `**Description:** ${lead.Description || "(none)"}`,
     `**Status:** ${lead.Status?.Description || lead.StatusId}`,
+    `**Status Detail:** ${detailLabel}${lead.StatusDetailId && lead.StatusDetail?.Description ? ` (${detailCode})` : ""}`,
     `**Size:** ${lead.Size?.Description || lead.SizeId}`,
     `**Type:** ${lead.Type?.Description || lead.TypeId || "—"}`,
     `**Pipeline:** ${lead.Pipeline?.Description || lead.PipelineId || "—"}`,
@@ -315,6 +336,29 @@ export async function getLeadLookups(args: z.infer<typeof getLeadLookupsSchema>)
 
   if (kind === "statuses" || kind === "all") {
     sections.push(await fetchAndFormat("Lead Statuses", "LeadStatus", "Code,Description"));
+  }
+  if (kind === "statusDetails" || kind === "all") {
+    const params = `${obsoleteFilter}$select=StatusId,Code,Description&$orderby=StatusId,Sequence&$top=500`;
+    const res = await client.get<LeadStatusDetail>("LeadStatusDetails", params);
+    if (res.value.length === 0) {
+      sections.push("## Lead Status Details\n(none)");
+    } else {
+      // Group by parent status code for readability while still listing every row.
+      const groups = new Map<string, LeadStatusDetail[]>();
+      for (const r of res.value) {
+        const key = r.StatusId || "(no-parent)";
+        if (!groups.has(key)) groups.set(key, []);
+        groups.get(key)!.push(r);
+      }
+      const blocks: string[] = [];
+      for (const [parent, rows] of groups) {
+        const lines = rows.map(
+          (r) => `- \`${r.Code}\` — ${r.Description || "(no description)"} (parent: \`${r.StatusId}\`)`
+        );
+        blocks.push(`### Parent Status: ${parent} (${rows.length})\n${lines.join("\n")}`);
+      }
+      sections.push(`## Lead Status Details (${res.value.length})\n${blocks.join("\n\n")}`);
+    }
   }
   if (kind === "sizes" || kind === "all") {
     sections.push(await fetchAndFormat("Lead Sizes", "LeadSizes", "Code,Description"));

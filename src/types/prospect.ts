@@ -264,6 +264,7 @@ export interface Lead {
   Contact?: Contact;
   Division?: Division;
   Status?: LeadStatus;
+  StatusDetail?: LeadStatusDetail;
   Size?: LeadSize;
   Source?: LeadSource;
   Type?: LeadType;
@@ -309,6 +310,14 @@ export interface LeadStatus {
   Sequence: number;
   Obsolete: number;
   DeadFlag: number;
+}
+
+export interface LeadStatusDetail {
+  StatusId: string;
+  Code: string;
+  Description: string | null;
+  Sequence: number;
+  Obsolete: number;
 }
 
 export interface LeadSize {

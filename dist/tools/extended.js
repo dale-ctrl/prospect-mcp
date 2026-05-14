@@ -235,6 +235,7 @@ export async function getLeadDetails(args) {
     const expand = [
         "Contact($select=ContactId,Forename,Surname,Email,PhoneNumber;$expand=Division($select=DivisionId,Name,SalesLedgerId;$expand=Address($select=AddressId,AddressLine1,AddressLine2,AddressLine3,Postcode,Country)))",
         "Status($select=Description)",
+        "StatusDetail($select=Code,Description)",
         "Owner($select=UserCode,UserName)",
         "Quotes($select=QuoteId,Description,DecimalHomeNetValue,DecimalHomeGrossValue,MarginPercentage;$expand=Status($select=Description);$orderby=Created desc;$top=10)",
     ].join(",");
@@ -243,16 +244,21 @@ export async function getLeadDetails(args) {
     const div = contact?.Division;
     const addr = div?.Address;
     const status = lead.Status;
+    const statusDetail = lead.StatusDetail;
+    const statusDetailId = lead.StatusDetailId ?? null;
     const resp = lead.Owner;
     const quotes = lead.Quotes;
     const contactName = contact ? `${contact.Forename || ""} ${contact.Surname || ""}`.trim() : "N/A";
     const address = addr
         ? [addr.AddressLine1, addr.AddressLine2, addr.AddressLine3, addr.Postcode, addr.Country].filter(Boolean).join(", ")
         : "N/A";
+    const detailLabel = statusDetail?.Description || statusDetailId || "—";
+    const detailCodeSuffix = statusDetailId && statusDetail?.Description ? ` (${statusDetailId})` : "";
     let output = [
         `# Opportunity / Lead #${lead.LeadId}`,
         `**Description:** ${lead.Description || "(none)"}`,
         `**Status:** ${status?.Description || "N/A"}`,
+        `**Status Detail:** ${detailLabel}${detailCodeSuffix}`,
         `**Confidence:** ${lead.Guttometer || 0}%`,
         `**Owner:** ${resp?.UserName || "N/A"} (${resp?.UserCode || "N/A"})`,
         `**Est. Close:** ${lead.EstimatedClose?.substring(0, 10) || "N/A"}`,

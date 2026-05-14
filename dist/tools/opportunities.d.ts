@@ -9,6 +9,7 @@ export declare const searchOpportunitiesSchema: z.ZodObject<{
     divisionName: z.ZodOptional<z.ZodString>;
     salesPersonId: z.ZodOptional<z.ZodString>;
     statusDescription: z.ZodOptional<z.ZodString>;
+    statusDetail: z.ZodOptional<z.ZodString>;
     pipelineId: z.ZodOptional<z.ZodString>;
     dateFrom: z.ZodOptional<z.ZodString>;
     dateTo: z.ZodOptional<z.ZodString>;
@@ -24,6 +25,7 @@ export declare const searchOpportunitiesSchema: z.ZodObject<{
     statusDescription?: string | undefined;
     dateFrom?: string | undefined;
     dateTo?: string | undefined;
+    statusDetail?: string | undefined;
     pipelineId?: string | undefined;
 }, {
     description?: string | undefined;
@@ -34,6 +36,7 @@ export declare const searchOpportunitiesSchema: z.ZodObject<{
     dateFrom?: string | undefined;
     dateTo?: string | undefined;
     top?: number | undefined;
+    statusDetail?: string | undefined;
     pipelineId?: string | undefined;
     includeClosed?: boolean | undefined;
 }>;
@@ -155,14 +158,14 @@ export declare const updateOpportunitySchema: z.ZodObject<{
     autocalculateValue?: boolean | undefined;
 }>;
 export declare const getLeadLookupsSchema: z.ZodObject<{
-    kind: z.ZodDefault<z.ZodOptional<z.ZodEnum<["statuses", "sizes", "sources", "types", "pipelines", "all"]>>>;
+    kind: z.ZodDefault<z.ZodOptional<z.ZodEnum<["statuses", "statusDetails", "sizes", "sources", "types", "pipelines", "all"]>>>;
     includeObsolete: z.ZodDefault<z.ZodOptional<z.ZodBoolean>>;
 }, "strip", z.ZodTypeAny, {
     includeObsolete: boolean;
-    kind: "all" | "types" | "statuses" | "sizes" | "sources" | "pipelines";
+    kind: "all" | "types" | "statuses" | "statusDetails" | "sizes" | "sources" | "pipelines";
 }, {
     includeObsolete?: boolean | undefined;
-    kind?: "all" | "types" | "statuses" | "sizes" | "sources" | "pipelines" | undefined;
+    kind?: "all" | "types" | "statuses" | "statusDetails" | "sizes" | "sources" | "pipelines" | undefined;
 }>;
 export declare function searchOpportunities(args: z.infer<typeof searchOpportunitiesSchema>): Promise<string>;
 export declare function getOpportunity(args: z.infer<typeof getOpportunitySchema>): Promise<string>;

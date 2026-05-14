@@ -617,7 +617,7 @@ server.tool("get_lead_details", "Get full Lead/opportunity details including con
     }
 });
 // ─── Opportunity (Lead) Tools ──────────────────────────────────
-server.tool("search_opportunities", "Search for opportunities (Leads) in Prospect CRM. Filter by description, contact, company, salesperson, status, pipeline, or date range. Excludes closed by default.", searchOpportunitiesSchema.shape, async (args) => {
+server.tool("search_opportunities", "Search for opportunities (Leads) in Prospect CRM. Filter by description, contact, company, salesperson, status, statusDetail (lost/won reason — label or code), pipeline, or date range. Excludes closed by default.", searchOpportunitiesSchema.shape, async (args) => {
     try {
         const result = await searchOpportunities(searchOpportunitiesSchema.parse(args));
         return { content: [{ type: "text", text: result }] };
@@ -653,7 +653,7 @@ registerWriteTool("update_opportunity", "Update fields on an existing opportunit
         return { content: [{ type: "text", text: `Error: ${err.message}` }], isError: true };
     }
 });
-server.tool("get_lead_lookups", "List available Lead lookup codes (statuses, sizes, sources, types, pipelines). Use these codes when creating or updating an opportunity. Pass kind='all' (default) or a specific table.", getLeadLookupsSchema.shape, async (args) => {
+server.tool("get_lead_lookups", "List available Lead lookup codes (statuses, statusDetails, sizes, sources, types, pipelines). 'statusDetails' returns the sub-statuses (e.g. lost/won reasons like 'Uncompetitive') grouped by parent status code. Use these codes when creating, updating or filtering opportunities. Pass kind='all' (default) or a specific table.", getLeadLookupsSchema.shape, async (args) => {
     try {
         const result = await getLeadLookups(getLeadLookupsSchema.parse(args));
         return { content: [{ type: "text", text: result }] };
