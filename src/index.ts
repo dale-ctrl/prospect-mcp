@@ -40,6 +40,7 @@ import {
   addQuoteLineSchema, addQuoteLine,
   updateQuoteLineSchema, updateQuoteLine,
   deleteQuoteLineSchema, deleteQuoteLine,
+  updateQuoteLineXtraSchema, updateQuoteLineXtra,
 } from "./tools/quote-lines.js";
 
 import {
@@ -454,6 +455,7 @@ const TOOL_PERMISSION_MAP: Record<string, { module: string; action: string }> = 
   delete_quote: { module: "quotes", action: "delete" },
   add_quote_line: { module: "quotes", action: "create" },
   update_quote_line: { module: "quotes", action: "edit" },
+  update_quote_line_xtra: { module: "quotes", action: "edit" },
   delete_quote_line: { module: "quotes", action: "delete" },
   add_quote_line_group: { module: "quotes", action: "create" },
   create_contact: { module: "contacts", action: "create" },
@@ -745,6 +747,20 @@ registerWriteTool(
   async (args) => {
     try {
       const result = await updateQuoteLine(updateQuoteLineSchema.parse(args));
+      return { content: [{ type: "text" as const, text: result }] };
+    } catch (err) {
+      return { content: [{ type: "text" as const, text: `Error: ${(err as Error).message}` }], isError: true };
+    }
+  }
+);
+
+registerWriteTool(
+  "update_quote_line_xtra",
+  "Write QuoteLineXtra custom-field values for a quote line. Pass a `fields` object keyed by friendly label (e.g. 'Colour (Extended)') OR raw slot identifier (e.g. 'StandardTextField3'). Use get_xtra_fields(entityType='QuoteLineXtras', parentId=<lineId>) to discover labels. Separate from update_quote_line so xtra writes don't trigger the QuoteLines price-recalc automation.",
+  updateQuoteLineXtraSchema.shape,
+  async (args) => {
+    try {
+      const result = await updateQuoteLineXtra(updateQuoteLineXtraSchema.parse(args));
       return { content: [{ type: "text" as const, text: result }] };
     } catch (err) {
       return { content: [{ type: "text" as const, text: `Error: ${(err as Error).message}` }], isError: true };

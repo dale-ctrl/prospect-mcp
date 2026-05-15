@@ -38,10 +38,10 @@ export declare const createActivityNoteSchema: z.ZodObject<{
     recallDateTime: z.ZodOptional<z.ZodString>;
     userCode: z.ZodOptional<z.ZodString>;
 }, "strip", z.ZodTypeAny, {
+    text: string;
     pinned: boolean;
     objectType: "contact" | "lead" | "division" | "enquiry" | "quote";
     objectId: number;
-    text: string;
     external: boolean;
     visibility: number;
     dateTime?: string | undefined;
@@ -50,9 +50,9 @@ export declare const createActivityNoteSchema: z.ZodObject<{
     recallDateTime?: string | undefined;
     userCode?: string | undefined;
 }, {
+    text: string;
     objectType: "contact" | "lead" | "division" | "enquiry" | "quote";
     objectId: number;
-    text: string;
     pinned?: boolean | undefined;
     dateTime?: string | undefined;
     tags?: string | undefined;

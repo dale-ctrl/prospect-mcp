@@ -77,7 +77,18 @@ export declare const deleteQuoteLineSchema: z.ZodObject<{
 }, {
     lineId: number;
 }>;
+export declare const updateQuoteLineXtraSchema: z.ZodObject<{
+    lineId: z.ZodNumber;
+    fields: z.ZodRecord<z.ZodString, z.ZodUnion<[z.ZodString, z.ZodNumber, z.ZodBoolean, z.ZodNull]>>;
+}, "strip", z.ZodTypeAny, {
+    fields: Record<string, string | number | boolean | null>;
+    lineId: number;
+}, {
+    fields: Record<string, string | number | boolean | null>;
+    lineId: number;
+}>;
 export declare function addQuoteLine(args: z.infer<typeof addQuoteLineSchema>): Promise<string>;
 export declare function updateQuoteLine(args: z.infer<typeof updateQuoteLineSchema>): Promise<string>;
 export declare function deleteQuoteLine(args: z.infer<typeof deleteQuoteLineSchema>): Promise<string>;
+export declare function updateQuoteLineXtra(input: z.input<typeof updateQuoteLineXtraSchema>): Promise<string>;
 //# sourceMappingURL=quote-lines.d.ts.map

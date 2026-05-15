@@ -24,7 +24,7 @@ import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js"
 import { getClient, loadCredentials } from "./client.js";
 // Tool schemas and handlers
 import { searchQuotesSchema, searchQuotes, getQuoteSchema, getQuote, createQuoteSchema, createQuote, updateQuoteSchema, updateQuote, duplicateQuoteSchema, duplicateQuote, addQuoteLineGroupSchema, addQuoteLineGroup, deleteQuoteSchema, deleteQuote, } from "./tools/quotes.js";
-import { addQuoteLineSchema, addQuoteLine, updateQuoteLineSchema, updateQuoteLine, deleteQuoteLineSchema, deleteQuoteLine, } from "./tools/quote-lines.js";
+import { addQuoteLineSchema, addQuoteLine, updateQuoteLineSchema, updateQuoteLine, deleteQuoteLineSchema, deleteQuoteLine, updateQuoteLineXtraSchema, updateQuoteLineXtra, } from "./tools/quote-lines.js";
 import { searchContactsSchema, searchContacts, searchProductsSchema, searchProducts, getProductDetailSchema, getProductDetail, searchDivisionsSchema, searchDivisions, listDivisionsSchema, listDivisions, getQuoteStatusesSchema, getQuoteStatuses, } from "./tools/lookups.js";
 import { getContactDetailsSchema, getContactDetails, getDivisionDetailsSchema, getDivisionDetails, getUsersSchema, getUsers, searchLeadsSchema, searchLeads, getLeadDetailsSchema, getLeadDetails, } from "./tools/extended.js";
 import { createDivisionSchema, createDivision, createContactSchema, createContact, updateContactSchema, updateContact, updateDivisionSchema, updateDivision, getContactRolesSchema, getContactRoles, resolveContactRoleSchema, resolveContactRoleHandler, lookupCompanyInfoSchema, lookupCompanyInfo, } from "./tools/contacts.js";
@@ -207,6 +207,7 @@ const TOOL_PERMISSION_MAP = {
     delete_quote: { module: "quotes", action: "delete" },
     add_quote_line: { module: "quotes", action: "create" },
     update_quote_line: { module: "quotes", action: "edit" },
+    update_quote_line_xtra: { module: "quotes", action: "edit" },
     delete_quote_line: { module: "quotes", action: "delete" },
     add_quote_line_group: { module: "quotes", action: "create" },
     create_contact: { module: "contacts", action: "create" },
@@ -437,6 +438,15 @@ registerWriteTool("add_quote_line", "Add a line item to an existing quote. Provi
 registerWriteTool("update_quote_line", "Update an existing line item on a quote. Provide the LineId and any fields to change (description, quantity, price, cost, discount, tax code, sequence).", updateQuoteLineSchema.shape, async (args) => {
     try {
         const result = await updateQuoteLine(updateQuoteLineSchema.parse(args));
+        return { content: [{ type: "text", text: result }] };
+    }
+    catch (err) {
+        return { content: [{ type: "text", text: `Error: ${err.message}` }], isError: true };
+    }
+});
+registerWriteTool("update_quote_line_xtra", "Write QuoteLineXtra custom-field values for a quote line. Pass a `fields` object keyed by friendly label (e.g. 'Colour (Extended)') OR raw slot identifier (e.g. 'StandardTextField3'). Use get_xtra_fields(entityType='QuoteLineXtras', parentId=<lineId>) to discover labels. Separate from update_quote_line so xtra writes don't trigger the QuoteLines price-recalc automation.", updateQuoteLineXtraSchema.shape, async (args) => {
+    try {
+        const result = await updateQuoteLineXtra(updateQuoteLineXtraSchema.parse(args));
         return { content: [{ type: "text", text: result }] };
     }
     catch (err) {

@@ -4,6 +4,7 @@
  */
 import { z } from "zod";
 import { getClient } from "../client.js";
+import { loadXtraSlots, indexSlotsByIdentifier } from "../lib/xtra-labels.js";
 // ─── Schemas ──────────────────────────────────────────────────
 export const getDivisionRfmSchema = z.object({
     divisionId: z.number().describe("DivisionId to get RFM data for. The SalesLedgerId is looked up automatically."),
@@ -11,9 +12,9 @@ export const getDivisionRfmSchema = z.object({
 export const getXtraFieldsSchema = z.object({
     entityType: z.enum([
         "QuoteXtras", "ContactXtras", "DivisionXtras", "LeadXtras",
-        "CampaignXtras", "BookingXtras", "ContractXtras",
+        "CampaignXtras", "BookingXtras", "ContractXtras", "QuoteLineXtras",
     ]).describe("Which Xtra entity set to query"),
-    parentId: z.union([z.number(), z.string()]).describe("The parent entity ID (e.g. QuoteId, ContactId, DivisionId)"),
+    parentId: z.union([z.number(), z.string()]).describe("The parent entity ID (e.g. QuoteId, ContactId, DivisionId, QuoteLineId for QuoteLineXtras)"),
 });
 export const getContactProfilingSchema = z.object({
     contactId: z.number().describe("ContactId to get profiling/recall data for"),
@@ -28,10 +29,11 @@ export const getContactProfilingSchema = z.object({
  * Iterate over whatever the API actually returned, classify by name prefix,
  * and skip null/empty values.
  */
-function formatXtraFields(data) {
+function formatXtraFieldValues(data, slotsByIdentifier = {}) {
     const lines = [];
     const buckets = [
         ["Text", /^StandardTextField(\d+)$/],
+        ["SearchText", /^StandardSearchTextField(\d+)$/],
         ["Decimal", /^StandardDecimalField(\d+)$/],
         ["Date", /^StandardDateField(\d+)$/],
         ["Flag", /^StandardFlagField(\d+)$/],
@@ -43,20 +45,32 @@ function formatXtraFields(data) {
         const matches = Object.entries(data)
             .map(([k, v]) => {
             const m = pattern.exec(k);
-            return m ? { idx: parseInt(m[1], 10), value: v } : null;
+            return m ? { idx: parseInt(m[1], 10), key: k, value: v } : null;
         })
             .filter((x) => x !== null && x.value != null && x.value !== "")
             .sort((a, b) => a.idx - b.idx);
-        for (const { idx, value } of matches) {
-            if (label === "Date" && typeof value === "string" && value.includes("T")) {
-                lines.push(`**${label} ${idx}:** ${value.substring(0, 10)}`);
-            }
-            else {
-                lines.push(`**${label} ${idx}:** ${String(value)}`);
-            }
+        for (const { idx, key, value } of matches) {
+            const slot = slotsByIdentifier[key];
+            const friendly = slot?.fieldLabel ? ` — _${slot.fieldLabel}_` : "";
+            const rendered = label === "Date" && typeof value === "string" && value.includes("T")
+                ? value.substring(0, 10)
+                : String(value);
+            lines.push(`**${label} ${idx}:**${friendly} ${rendered}`);
         }
     }
-    return lines.length > 0 ? lines.join("\n") : "(no custom fields set)";
+    return lines.length > 0 ? lines.join("\n") : "(no values stored)";
+}
+/** Render the slot map regardless of whether values are populated. */
+function formatXtraSlots(slots) {
+    if (slots.length === 0) {
+        return "(no slots discovered — EntityFields returned nothing for this entity)";
+    }
+    return slots
+        .map((s) => {
+        const labelBit = s.fieldLabel ? ` — _${s.fieldLabel}_` : "";
+        return `- \`${s.identifier}\` (column: \`${s.columnName}\`)${labelBit}`;
+    })
+        .join("\n");
 }
 // ─── Handlers ─────────────────────────────────────────────────
 export async function getDivisionRfm(args) {
@@ -105,27 +119,43 @@ export async function getXtraFields(args) {
         CampaignXtras: "CampaignId",
         BookingXtras: "BookingId",
         ContractXtras: "ContractId",
+        QuoteLineXtras: "QuoteLineId",
     };
     const parentKey = parentKeyMap[args.entityType];
     if (!parentKey) {
         return `Unknown Xtra entity type: ${args.entityType}`;
     }
-    // Don't $select — the standard-field shape varies per Xtra entity (e.g.
-    // DivisionXtra has only StandardDecimalField1..5 and uses StandardFlagField,
-    // not StandardBooleanField). A hardcoded select 400s on those fields.
-    // Instead, ask for everything and let the formatter ignore unknown shapes.
-    const sp = new URLSearchParams();
-    sp.set("$filter", `${parentKey} eq ${args.parentId}`);
-    const result = await client.get(args.entityType, sp.toString());
-    if (result.value.length === 0) {
-        return `No Xtra/custom field data found for ${args.entityType} with ${parentKey}=${args.parentId}.`;
-    }
-    const data = result.value[0];
+    // Fetch slots in parallel with the data — slots are cached per-process
+    // and an EntityFields lookup failure shouldn't blank the underlying values.
+    const [result, slots] = await Promise.all([
+        (async () => {
+            // Don't $select — the standard-field shape varies per Xtra entity (e.g.
+            // DivisionXtra has only StandardDecimalField1..5 and uses StandardFlagField,
+            // not StandardBooleanField). A hardcoded select 400s on those fields.
+            // Instead, ask for everything and let the formatter ignore unknown shapes.
+            const sp = new URLSearchParams();
+            sp.set("$filter", `${parentKey} eq ${args.parentId}`);
+            return client.get(args.entityType, sp.toString());
+        })(),
+        loadXtraSlots(client, args.entityType).catch(() => []),
+    ]);
+    const data = result.value[0] ?? {};
+    const slotIndex = indexSlotsByIdentifier(slots);
+    const rowExists = result.value.length > 0;
+    // Always emit the slot map — separates "no slots configured" (empty
+    // EntityFields response) from "no values stored" (slot map present but
+    // every slot is null). Earlier rounds collapsed both into one message.
     return [
         `# Custom Fields — ${args.entityType}`,
         `**${parentKey}:** ${args.parentId}`,
         "",
-        formatXtraFields(data),
+        `## Configured slots (${slots.length})`,
+        formatXtraSlots(slots),
+        "",
+        `## Stored values`,
+        rowExists
+            ? formatXtraFieldValues(data, slotIndex)
+            : `(no Xtra row exists yet for ${parentKey}=${args.parentId} — first write will create one)`,
     ].join("\n");
 }
 export async function getContactProfiling(args) {
