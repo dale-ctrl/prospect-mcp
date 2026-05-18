@@ -472,7 +472,7 @@ server.tool("search_contacts", "Search for contacts in Prospect CRM by name, ema
         return { content: [{ type: "text", text: `Error: ${err.message}` }], isError: true };
     }
 });
-server.tool("search_products", "Search the product catalogue in Prospect CRM by SKU code or description. Returns product codes, sell prices, cost prices, and stock levels.", searchProductsSchema.shape, async (args) => {
+server.tool("search_products", "Search the product catalogue across SKU, description, extended description, manufacturer reference (supplier code), manufacturer name, alternate references 1–4, and barcode. Case-insensitive substring. Pass searchFields=['ManufacturerReference'] (or any subset) to narrow. Returns SKU, prices, stock, plus supplier/refs lines so you can see why a row matched.", searchProductsSchema.shape, async (args) => {
     try {
         const result = await searchProducts(searchProductsSchema.parse(args));
         return { content: [{ type: "text", text: result }] };

@@ -8,8 +8,32 @@ export const searchContactsSchema = z.object({
     searchTerm: z.string().describe("Name, email, or phone number to search for"),
     top: z.number().optional().default(10).describe("Max results (default 10)"),
 });
+/**
+ * Fields search_products consults. Match is case-insensitive substring on each.
+ * Order matters: it controls the order of OR clauses in the OData $filter (and
+ * therefore the order documented in errors / help text).
+ */
+export const PRODUCT_SEARCH_FIELDS = [
+    "ProductItemId",
+    "Description",
+    "ExtendedDescription",
+    "ManufacturerReference",
+    "Manufacturer",
+    "AlternateReference1",
+    "AlternateReference2",
+    "AlternateReference3",
+    "AlternateReference4",
+    "Barcode",
+];
 export const searchProductsSchema = z.object({
-    searchTerm: z.string().describe("Product code (SKU) or description to search for"),
+    searchTerm: z.string().describe("Substring to look for. Matches case-insensitively against SKU, description, extended description, " +
+        "manufacturer reference (supplier code), manufacturer name, AlternateReference1..4, and barcode."),
+    searchFields: z
+        .array(z.enum(PRODUCT_SEARCH_FIELDS))
+        .optional()
+        .describe("Optional subset of fields to search. Defaults to all of: " +
+        PRODUCT_SEARCH_FIELDS.join(", ") +
+        ". Use this to narrow a noisy search (e.g. searchFields=['ManufacturerReference'] to look up by supplier code only)."),
     salesAnalysisMin: z.number().optional().describe("Filter by Access Dimensions sales nominal >= this integer (e.g. 1000). Stored as string '10-1-NNNN-000' — pass the 4-digit nominal only."),
     salesAnalysisMax: z.number().optional().describe("Filter by Access Dimensions sales nominal <= this integer (e.g. 1195). Used with salesAnalysisMin to filter a range, e.g. 1000–1195 for paper."),
     top: z.number().optional().default(10).describe("Max results (default 10)"),
@@ -79,27 +103,51 @@ export async function searchContacts(args) {
     });
     return `Found ${result.value.length} contact(s):\n\n${lines.join("\n\n")}`;
 }
-export async function searchProducts(args) {
-    const client = getClient();
+/**
+ * Build the $filter clause for search_products. Exported so the unit test
+ * can assert on it without round-tripping through fetch.
+ *
+ * Case-insensitive via `tolower(<field>)` on both sides — OData v4's
+ * `contains()` is case-sensitive by default, and the WCG catalogue mixes
+ * upper/mixed-case SKUs ("NC27062401") with title-case manufacturers
+ * ("Arrow Group Global Ltd."). Null values short-circuit cleanly: any
+ * `tolower(null)` makes the clause evaluate null → false, so missing fields
+ * are simply ignored rather than throwing.
+ */
+export function buildProductSearchFilter(args) {
     const term = args.searchTerm;
-    const filterParts = [
-        `(contains(ProductItemId,'${term}') or contains(Description,'${term}'))`,
-        "Obsolete ne 1",
-    ];
+    const fields = args.searchFields && args.searchFields.length > 0
+        ? args.searchFields
+        : PRODUCT_SEARCH_FIELDS;
+    const literal = escapeOData(term.toLowerCase());
+    const orClause = fields
+        .map((f) => `contains(tolower(${f}),'${literal}')`)
+        .join(" or ");
+    const parts = [`(${orClause})`, "Obsolete ne 1"];
     // SalesAnalysis is Edm.String with format "10-1-NNNN-000" (e.g. "10-1-1125-000").
     // Use lexical string comparisons with zero-padded 4-digit nominal segments.
     // -000 as min suffix, -999 as max suffix so the entire nominal range is captured.
     if (args.salesAnalysisMin !== undefined) {
-        const min = String(args.salesAnalysisMin).padStart(4, '0');
-        filterParts.push(`SalesAnalysis ge '10-1-${min}-000'`);
+        const min = String(args.salesAnalysisMin).padStart(4, "0");
+        parts.push(`SalesAnalysis ge '10-1-${min}-000'`);
     }
     if (args.salesAnalysisMax !== undefined) {
-        const max = String(args.salesAnalysisMax).padStart(4, '0');
-        filterParts.push(`SalesAnalysis le '10-1-${max}-999'`);
+        const max = String(args.salesAnalysisMax).padStart(4, "0");
+        parts.push(`SalesAnalysis le '10-1-${max}-999'`);
     }
+    return parts.join(" and ");
+}
+export async function searchProducts(args) {
+    const client = getClient();
+    const term = args.searchTerm;
+    const filter = buildProductSearchFilter(args);
+    // $select includes the new searchable + diagnostic fields so the renderer
+    // can show *why* a row matched (e.g. Mfr Ref hit). ExtendedDescription is
+    // queryable but deliberately NOT selected — it's 32 KB per row and bloats
+    // the response; the caller can fetch it via get_product_detail.
     const params = [
-        `$filter=${filterParts.join(" and ")}`,
-        `$select=ProductItemId,Description,DecimalSellingPrice,DecimalCostPrice,DecimalQuantityAvailable,CategoryId,UnitDescription,SalesAnalysis`,
+        `$filter=${filter}`,
+        `$select=ProductItemId,Description,DecimalSellingPrice,DecimalCostPrice,DecimalQuantityAvailable,CategoryId,UnitDescription,SalesAnalysis,Manufacturer,ManufacturerReference,AlternateReference1,AlternateReference2,AlternateReference3,AlternateReference4,Barcode`,
         `$top=${args.top || 10}`,
         `$orderby=ProductItemId`,
     ].join("&");
@@ -108,11 +156,34 @@ export async function searchProducts(args) {
         return `No products found matching "${term}".`;
     }
     const lines = result.value.map((p) => {
-        return [
+        const rows = [
             `**${p.ProductItemId}** — ${p.Description || "(no description)"}`,
             `  Sell: £${p.DecimalSellingPrice?.toFixed(2) ?? "N/A"} | Cost: £${p.DecimalCostPrice?.toFixed(2) ?? "N/A"} | Stock: ${p.DecimalQuantityAvailable ?? "N/A"}`,
             `  Category: ${p.CategoryId || "N/A"} | Unit: ${p.UnitDescription || "N/A"} | Sales Nominal: ${p.SalesAnalysis ?? "N/A"}`,
-        ].join("\n");
+        ];
+        // Append a supplier/refs line only when any of those fields is populated —
+        // most products fill at least one (Mfr or MfrRef), so this is usually visible.
+        const mfrBits = [];
+        if (p.Manufacturer)
+            mfrBits.push(`Manufacturer: ${p.Manufacturer}`);
+        if (p.ManufacturerReference)
+            mfrBits.push(`Mfr Ref: ${p.ManufacturerReference}`);
+        if (p.Barcode)
+            mfrBits.push(`Barcode: ${p.Barcode}`);
+        if (mfrBits.length > 0)
+            rows.push(`  ${mfrBits.join(" | ")}`);
+        const altBits = [];
+        if (p.AlternateReference1)
+            altBits.push(`Alt1: ${p.AlternateReference1}`);
+        if (p.AlternateReference2)
+            altBits.push(`Alt2: ${p.AlternateReference2}`);
+        if (p.AlternateReference3)
+            altBits.push(`Alt3: ${p.AlternateReference3}`);
+        if (p.AlternateReference4)
+            altBits.push(`Alt4: ${p.AlternateReference4}`);
+        if (altBits.length > 0)
+            rows.push(`  ${altBits.join(" | ")}`);
+        return rows.join("\n");
     });
     return `Found ${result.value.length} product(s):\n\n${lines.join("\n\n")}`;
 }
