@@ -7,7 +7,12 @@
  * saves the correction here. Next conversation, it reads the file and
  * gets it right.
  *
- * Files are stored on the NAS so all users benefit from shared learning.
+ * Storage location resolution (in priority order):
+ *   1. WCG_KNOWLEDGE_PATH env var — point at a shared folder (e.g. a OneDrive
+ *      path) for team-wide knowledge sharing. RECOMMENDED for WCG team use.
+ *   2. Fallback to <plugin-root>/reference/ — per-machine, no team sharing.
+ *      Kept for backwards compatibility with installs that haven't been
+ *      configured yet.
  */
 
 import { z } from "zod";
@@ -17,10 +22,12 @@ import { fileURLToPath } from "url";
 
 // ─── Path resolution ──────────────────────────────────────────
 
-// Knowledge files live alongside the server code on the NAS
+// Knowledge files live in WCG_KNOWLEDGE_PATH (shared OneDrive) if set,
+// otherwise alongside the server code (per-machine fallback).
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
-const KNOWLEDGE_DIR = join(__dirname, "..", "..", "reference");
+const KNOWLEDGE_DIR = process.env.WCG_KNOWLEDGE_PATH
+  || join(__dirname, "..", "..", "reference");
 const LESSONS_FILE = join(KNOWLEDGE_DIR, "quoting-lessons.md");
 const PRODUCT_NOTES_FILE = join(KNOWLEDGE_DIR, "product-notes.md");
 

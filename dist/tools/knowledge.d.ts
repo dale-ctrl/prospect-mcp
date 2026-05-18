@@ -7,7 +7,12 @@
  * saves the correction here. Next conversation, it reads the file and
  * gets it right.
  *
- * Files are stored on the NAS so all users benefit from shared learning.
+ * Storage location resolution (in priority order):
+ *   1. WCG_KNOWLEDGE_PATH env var — point at a shared folder (e.g. a OneDrive
+ *      path) for team-wide knowledge sharing. RECOMMENDED for WCG team use.
+ *   2. Fallback to <plugin-root>/reference/ — per-machine, no team sharing.
+ *      Kept for backwards compatibility with installs that haven't been
+ *      configured yet.
  */
 import { z } from "zod";
 export declare const saveQuotingLessonSchema: z.ZodObject<{
