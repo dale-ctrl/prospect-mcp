@@ -120,21 +120,56 @@ Review the entire conversation from this session. Extract and organise:
    This overwrites the live skill file in the user's repo. No outputs folder, no manual
    "Customize → Skills → Replace" step.
 
-6. **Print the git command** for the user to paste in their terminal:
+6. **Bump the plugin's version** in `<plugin-repo>/.claude-plugin/plugin.json`. A skill content
+   change is a MINOR bump (X.Y.Z → X.(Y+1).0). Cowork uses the plugin version + a GitHub Release
+   together to detect updates — both must reflect the new version, or teammates won't see the
+   change.
 
    ```
-   git -C "<plugin-repo>" add skills/<skill-name>/SKILL.md && \
-   git -C "<plugin-repo>" commit -m "Update <skill-name>: <one-line summary of what was learned>" && \
+   Edit(<plugin-repo>/.claude-plugin/plugin.json, '"version": "X.Y.Z"', '"version": "X.(Y+1).0"')
+   ```
+
+7. **Print the full deployment sequence** for the user to paste in their terminal — commit,
+   push, tag, AND (critically) the GitHub Release URL:
+
+   ```
+   # Commit + push the change
+   git -C "<plugin-repo>" add skills/<skill-name>/SKILL.md .claude-plugin/plugin.json
+   git -C "<plugin-repo>" commit -m "Update <skill-name>: <one-line summary of what was learned>"
    git -C "<plugin-repo>" push
+
+   # Tag this version (must match the new plugin.json version)
+   git -C "<plugin-repo>" tag -a vX.Y.Z -m "vX.Y.Z — <one-line summary>"
+   git -C "<plugin-repo>" push origin vX.Y.Z
    ```
 
-   Replace `<plugin-repo>` with the actual absolute path to the repo. Replace `<one-line summary>`
-   with a short description of the learning (e.g. "add Pitfall 9: cannot change SKU on existing line").
+   **Then — CRITICAL — create a GitHub Release for the tag.** A tag alone is not enough:
+   Cowork's plugin install mechanism detects new versions via GitHub **Releases**, not just
+   tags. Without this step, teammates' Update button stays greyed out and the change is
+   invisible to them.
 
-7. **Tell the user what teammates need to do** to get the update:
-   - If the marketplace auto-syncs: nothing — they'll get it on next session.
-   - If they pull manually: "Teammates: run `/plugin update <plugin-name>` next time you're in
-     Cowork to pick this up."
+   Two ways to create the Release:
+
+   - **Web UI** (easiest — the URL pre-selects the tag and pre-fills the title):
+
+     ```
+     https://github.com/<owner>/<repo>/releases/new?tag=vX.Y.Z&title=vX.Y.Z
+     ```
+
+     Add brief notes in the description. Tick "Set as the latest release". Click "Publish release".
+
+   - **gh CLI** (if installed):
+
+     ```
+     gh release create vX.Y.Z --notes "<one-line summary>" --latest
+     ```
+
+8. **Tell the user what teammates need to do** to get the update:
+   - **After the Release is published**, Customize → Plugins → `<plugin-name>` shows an enabled
+     Update button. Teammates click it, then fully restart Cowork (quit via system tray + Task
+     Manager check, not just close the window), and the new content appears.
+   - **Before the Release is published**, the Update button is greyed out — the commit on `main`
+     is invisible to teammates' Cowork installs regardless of the tag's existence.
 
 ## Step 3b: Create a new task-specific skill
 
@@ -187,15 +222,32 @@ Write them as explicit warnings.]
    Write(<plugin-repo>/skills/<new-skill-name>/SKILL.md, <new skill content>)
    ```
 
-5. **Print the git command** (includes `git add` of the new directory):
+5. **Bump the plugin's version** in `<plugin-repo>/.claude-plugin/plugin.json` — adding a brand
+   new skill is also a MINOR bump (X.Y.Z → X.(Y+1).0). Both the version field and a matching
+   GitHub Release are required for Cowork to surface the new skill to teammates.
 
    ```
-   git -C "<plugin-repo>" add skills/<new-skill-name>/ && \
-   git -C "<plugin-repo>" commit -m "Add skill: <new-skill-name> — <one-line description>" && \
+   Edit(<plugin-repo>/.claude-plugin/plugin.json, '"version": "X.Y.Z"', '"version": "X.(Y+1).0"')
+   ```
+
+6. **Print the full deployment sequence** for the user to paste in their terminal:
+
+   ```
+   # Commit + push (new skill folder + plugin.json bump)
+   git -C "<plugin-repo>" add skills/<new-skill-name>/ .claude-plugin/plugin.json
+   git -C "<plugin-repo>" commit -m "Add skill: <new-skill-name> — <one-line description>"
    git -C "<plugin-repo>" push
+
+   # Tag this version
+   git -C "<plugin-repo>" tag -a vX.Y.Z -m "vX.Y.Z — add <new-skill-name>"
+   git -C "<plugin-repo>" push origin vX.Y.Z
    ```
 
-6. **Tell the user about teammate propagation** (same as Step 3a step 7).
+   **Then create a GitHub Release for the tag** — see Step 3a step 7 for the URL format and
+   the `gh release create` alternative. This is the trigger that makes teammates' Update button
+   work; without it the new skill is invisible to them.
+
+7. **Tell the user about teammate propagation** — same as Step 3a step 8.
 
 ## Step 4: Capture session-level knowledge that doesn't belong in the skill
 
@@ -223,25 +275,38 @@ End the retrospective with a clean summary in chat:
 
 Example:
 
-> Done. Three changes captured:
+> Done. Four changes captured:
 >
 > 1. **Skill updated** — `<plugin-repo>/skills/prospect-crm-create-quote/SKILL.md`
 >    - Added Pitfall 9: cannot change SKU on existing line
 >    - Reinforced Pitfall 1 with concurrent-edit duplicate-line case
 >    - Changelog dated 2026-05-18
 >
-> 2. **Knowledge saved** — `product-NC18052601` note (DBD-140-80-N qty rule), `supplier-lee-plumpton`
+> 2. **Plugin version bumped** — `.claude-plugin/plugin.json` 1.9.0 → 1.10.0
+>
+> 3. **Knowledge saved** — `product-NC18052601` note (DBD-140-80-N qty rule), `supplier-lee-plumpton`
 >    lesson (defunct, 8 SKUs affected).
 >
-> 3. **To push to the team**, paste this in your terminal:
+> 4. **To push to the team**, paste this in your terminal:
 >
 >    ```
->    git -C "Z:\prospect-mcp-plugin" add skills/prospect-crm-create-quote/SKILL.md && \
->    git -C "Z:\prospect-mcp-plugin" commit -m "Update prospect-crm-create-quote: add Pitfall 9 + reinforce Pitfall 1" && \
->    git -C "Z:\prospect-mcp-plugin" push
+>    git -C "C:\Users\<you>\Repos\prospect-mcp" add skills/prospect-crm-create-quote/SKILL.md .claude-plugin/plugin.json
+>    git -C "C:\Users\<you>\Repos\prospect-mcp" commit -m "Update prospect-crm-create-quote: add Pitfall 9 + reinforce Pitfall 1"
+>    git -C "C:\Users\<you>\Repos\prospect-mcp" push
+>    git -C "C:\Users\<you>\Repos\prospect-mcp" tag -a v1.10.0 -m "v1.10.0 — Pitfall 9 + Pitfall 1 reinforcement"
+>    git -C "C:\Users\<you>\Repos\prospect-mcp" push origin v1.10.0
 >    ```
 >
->    Teammates: run `/plugin update <plugin-name>` next time you're in Cowork to pick this up.
+>    **Then publish a GitHub Release** for the tag (REQUIRED — without it teammates can't update):
+>
+>    ```
+>    https://github.com/dale-ctrl/prospect-mcp/releases/new?tag=v1.10.0&title=v1.10.0
+>    ```
+>
+>    Add brief notes. Tick "Set as the latest release". Click "Publish release".
+>
+>    Teammates: after the Release is published, Customize → Plugins → prospect-crm → Update
+>    button becomes enabled. Click it, restart Cowork, the new content appears.
 
 ## First-time setup
 
@@ -304,6 +369,15 @@ When writing or updating task-specific skills, follow these principles:
 
 ## Changelog
 
+- **2026-05-18 (v3)** — Added GitHub Releases to the deployment sequence. Cowork's plugin install
+  mechanism detects new versions via GitHub **Releases**, NOT just tags — without a published
+  Release, teammates' Update button stays greyed out and changes are invisible to them. Step 3a
+  step 6/7 and Step 3b step 5/6 now print a four-part deployment sequence (plugin.json bump +
+  commit/push + tag + Release) instead of a single git command. Step 5 example updated to show
+  the full sequence including the Release URL. Discovered during a multi-hour debug of why v1.9.0
+  didn't propagate to Cowork after a clean tag + push — the missing Release step was the entire
+  issue. The cache structure at `~/.claude/plugins/cache/<marketplace>/<plugin>/<version>/` is
+  populated only on a successful Release-triggered install.
 - **2026-05-18 (v2)** — Major rewrite for team deployment. Skill now writes SKILL.md updates
   directly to the mounted WCG plugin repo and prints a one-line git command for the user to
   paste in their terminal. Removed the manual "Customize → Skills → Replace" step from the
