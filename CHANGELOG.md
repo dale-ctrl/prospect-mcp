@@ -6,6 +6,46 @@ The format is based on Keep a Changelog, and this project adheres to Semantic Ve
 
 ## [Unreleased]
 
+## [1.12.0] - 2026-05-19
+### Added
+- **Price Expiry support on `create_quote` and `update_quote`.** New optional `priceExpiryDate` parameter (accepts `YYYY-MM-DD` or full ISO datetime). Writes to `Quote.EndDate` — the column the Prospect UI surfaces as **"Price Expiry"** on the Quote header Entry tab. When omitted on `create_quote`, defaults to today + 30 days, matching Prospect's tenant-wide `Quote expiry default days = 30` system option and the WCG rule that prices are held for 30 days from quote date.
+- **`get_quote` now surfaces Price Expiry** in its rendered output (previously it displayed "Due Date" pulled from the deprecated `OrderDueDate` field, which has been misleading every reader).
+- **`search_quotes`** result list now shows Price Expiry instead of Due Date for the same reason.
+
+### Changed
+- Existing `orderDueDate` parameter on `create_quote` / `update_quote` is now marked **DEPRECATED** in its description. It still writes to the legacy `donotuse_orderduedate` column for backward-compat, but that column is no longer surfaced by the Prospect UI, so values written there have no visible effect. Callers should switch to `priceExpiryDate`.
+
+### Field mapping resolved
+`Quote.EndDate` is the live column for Price Expiry on the WCG tenant — confirmed 2026-05-19 via browser dev-tools inspection of the Quote header form on quote 15493 (PATCH payload was `{"EndDate": "2026-06-17T23:00:00.000Z"}` for an entered date of 18/06/2026 BST). The underlying database column `donotuse_enddate` has been REPURPOSED — the `donotuse_` prefix on the column name is legacy and misleading. The corollary `donotuse_orderduedate` column (mapped to the API field `OrderDueDate`) genuinely IS deprecated and unsurfaced — two different legacy-prefixed columns, only one of them repurposed.
+
+### Date handling
+`priceExpiryDate` accepts `YYYY-MM-DD` or full ISO datetime. Both are normalised to **12:00 UTC on the target calendar date** before writing. Midday UTC avoids the BST/GMT day-boundary issue: midnight local time in BST is 23:00 UTC the day before, which would tip the displayed date in the Prospect UI to the prior day. Midday UTC sits inside the same calendar date in any plausible UK-local timezone.
+
+### Type changes
+`Quote` interface gains `EndDate: string | null`. `QuoteCreate` interface gains optional `EndDate?: string`.
+
+### Why
+Until now there was no way for the MCP to set Price Expiry — every quote raised through MCP came out with the field blank, which the Prospect UI renders as year `0000` and downstream rendering (the quote PDF "prices held for 30 days from date of quote" line) would have looked wrong against a missing/zero expiry. Prior assumption (Pitfall 7 in the create-quote skill) was that Price Expiry lived in `QuoteXtras.StandardDateField1-5` — verified wrong on 2026-05-19; xtras stay empty even after the UI sets the value. It's a core Quote field, just hidden behind a misleading legacy column name.
+
+### Verified
+Code change only — `npm run build` produces a clean compile. Live round-trip verification deferred to first MCP-call against the WCG tenant after deploy (will confirm the PATCH lands and the UI shows the expected date). Browser-inspected PATCH payload shape matches what `computePriceExpiry` produces.
+
+## [1.11.0] - 2026-05-18
+### Added
+- **Shared OneDrive knowledge store via `WCG_KNOWLEDGE_PATH` env var.** `src/tools/knowledge.ts` now reads `quoting-lessons.md` and `product-notes.md` from `process.env.WCG_KNOWLEDGE_PATH || <plugin>/reference/`. Team members configure the env var in `claude_desktop_config.json` to point at a shared OneDrive folder, and all `save_quoting_lesson` / `save_product_note` writes propagate through OneDrive sync. Existing per-machine behaviour preserved as fallback for installs without the env var set.
+
+## [1.10.0] - 2026-05-15
+### Added
+- **`prospect-crm-create-quote` and `wcg-retrospective` skills** bundled with the plugin. The plugin now ships three skills (alongside `versa-maintenance-contracts-bulk`). `wcg-retrospective` writes SKILL.md updates directly to the mounted plugin repo and prints a one-line git command for the user — retrospective improvements now deploy team-wide automatically.
+
+## [1.9.0] - 2026-05-15
+### Added
+- **`wcg-retrospective` v3** — adds the GitHub Release step to the deployment sequence (Cowork's plugin install mechanism only detects new versions when a Release exists, not just a tag). Captures the multi-hour 2026-05-18 debug session into the workflow.
+
+## [1.8.0] - 2026-05-12
+### Added
+- (changelog entry not previously recorded — placeholder; the `v1.8.0` tag corresponds to commit `d3e2b6d2`.)
+
 ## [1.7.0] - 2026-05-12
 ### Added
 - `update_division_address` tool — patches the Address entity linked from the Division. Resolves AddressId from divisionId automatically. Mirrors the cross-entity-updater pattern used by `update_division_versa_maintenance`. Only fields supplied are patched; empty string explicitly clears a line; whitespace is trimmed. Foreign postcodes and countries pass through as-is. New file [src/tools/division-address.ts](src/tools/division-address.ts).

@@ -30,6 +30,11 @@ export interface Quote {
     QuoteDate: string | null;
     OrderDate: string | null;
     OrderDueDate: string | null;
+    /** Price Expiry — surfaced in the Prospect UI as the "Price Expiry" date on the
+     *  Quote header Entry tab. Underlying column is `donotuse_enddate` (the column was
+     *  repurposed; the `donotuse_` prefix is misleading — it's actively in use). WCG
+     *  convention is to hold prices for 30 days from quote create date. */
+    EndDate: string | null;
     Created: string | null;
     LastUpdated: string | null;
     DecimalHomeNetValue: number | null;
@@ -55,6 +60,8 @@ export interface QuoteCreate {
     OrderNumber?: string;
     CustomerOrderReference?: string;
     OrderDueDate?: string;
+    /** Price Expiry (Quote.EndDate). ISO datetime string. */
+    EndDate?: string;
     Memo?: string;
     ProjectCode?: string;
     Priority?: number;

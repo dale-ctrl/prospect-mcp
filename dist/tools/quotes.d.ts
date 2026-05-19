@@ -43,6 +43,7 @@ export declare const createQuoteSchema: z.ZodObject<{
     description: z.ZodOptional<z.ZodString>;
     salesPersonId: z.ZodOptional<z.ZodString>;
     orderDueDate: z.ZodOptional<z.ZodString>;
+    priceExpiryDate: z.ZodOptional<z.ZodString>;
     customerOrderReference: z.ZodOptional<z.ZodString>;
     memo: z.ZodOptional<z.ZodString>;
     projectCode: z.ZodOptional<z.ZodString>;
@@ -59,6 +60,7 @@ export declare const createQuoteSchema: z.ZodObject<{
     salesPersonId?: string | undefined;
     leadId?: number | undefined;
     orderDueDate?: string | undefined;
+    priceExpiryDate?: string | undefined;
     customerOrderReference?: string | undefined;
     memo?: string | undefined;
     projectCode?: string | undefined;
@@ -75,6 +77,7 @@ export declare const createQuoteSchema: z.ZodObject<{
     salesPersonId?: string | undefined;
     leadId?: number | undefined;
     orderDueDate?: string | undefined;
+    priceExpiryDate?: string | undefined;
     customerOrderReference?: string | undefined;
     memo?: string | undefined;
     projectCode?: string | undefined;
@@ -93,6 +96,7 @@ export declare const updateQuoteSchema: z.ZodObject<{
     salesPersonId: z.ZodOptional<z.ZodString>;
     orderNumber: z.ZodOptional<z.ZodString>;
     orderDueDate: z.ZodOptional<z.ZodString>;
+    priceExpiryDate: z.ZodOptional<z.ZodString>;
     customerOrderReference: z.ZodOptional<z.ZodString>;
     memo: z.ZodOptional<z.ZodString>;
     projectCode: z.ZodOptional<z.ZodString>;
@@ -109,6 +113,7 @@ export declare const updateQuoteSchema: z.ZodObject<{
     salesPersonId?: string | undefined;
     leadId?: number | undefined;
     orderDueDate?: string | undefined;
+    priceExpiryDate?: string | undefined;
     customerOrderReference?: string | undefined;
     memo?: string | undefined;
     projectCode?: string | undefined;
@@ -126,6 +131,7 @@ export declare const updateQuoteSchema: z.ZodObject<{
     salesPersonId?: string | undefined;
     leadId?: number | undefined;
     orderDueDate?: string | undefined;
+    priceExpiryDate?: string | undefined;
     customerOrderReference?: string | undefined;
     memo?: string | undefined;
     projectCode?: string | undefined;

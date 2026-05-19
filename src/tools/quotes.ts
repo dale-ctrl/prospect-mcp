@@ -21,6 +21,40 @@ async function fetchOpportunityDescription(leadId: number): Promise<string | nul
   return desc.length > QUOTE_DESCRIPTION_MAX ? desc.slice(0, QUOTE_DESCRIPTION_MAX) : desc;
 }
 
+const PRICE_EXPIRY_DEFAULT_DAYS = 30; // matches Prospect's "Quote expiry default days" system option and the WCG "prices held for 30 days" rule
+
+/**
+ * Compute the ISO datetime string written to Quote.EndDate (Price Expiry).
+ *
+ * Accepts either a YYYY-MM-DD date string or a full ISO datetime; in both cases
+ * the output is normalised to 12:00 UTC on the target calendar date. Midday UTC
+ * avoids the BST/GMT day-boundary issue we'd hit if we used midnight: 18/06
+ * 00:00 BST = 17/06 23:00 UTC, which would tip the displayed date in the UI to
+ * the prior day. Midday UTC sits comfortably inside the same calendar date in
+ * any plausible UK-local timezone.
+ *
+ * When input is omitted, defaults to (today + PRICE_EXPIRY_DEFAULT_DAYS) at
+ * 12:00 UTC.
+ */
+function computePriceExpiry(input?: string): string {
+  let target: Date;
+  if (input) {
+    if (/^\d{4}-\d{2}-\d{2}$/.test(input)) {
+      target = new Date(`${input}T12:00:00.000Z`);
+    } else {
+      const parsed = new Date(input);
+      if (Number.isNaN(parsed.getTime())) {
+        throw new Error(`Invalid priceExpiryDate: '${input}'. Expected YYYY-MM-DD or ISO datetime.`);
+      }
+      target = new Date(Date.UTC(parsed.getUTCFullYear(), parsed.getUTCMonth(), parsed.getUTCDate(), 12, 0, 0, 0));
+    }
+  } else {
+    const now = new Date();
+    target = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate() + PRICE_EXPIRY_DEFAULT_DAYS, 12, 0, 0, 0));
+  }
+  return target.toISOString();
+}
+
 // ─── Schemas ───────────────────────────────────────────────────
 
 export const searchQuotesSchema = z.object({
@@ -43,7 +77,8 @@ export const createQuoteSchema = z.object({
   leadId: z.number().optional().describe("LeadId (opportunity) to link this quote to. Use search_opportunities to find. When supplied, the quote description is automatically copied from the opportunity's Description, overriding any `description` arg below."),
   description: z.string().optional().describe("Quote description/title. IGNORED when `leadId` is supplied — the opportunity's description is used instead. Only used when there is no linked opportunity, or as a fallback when the linked opportunity has no description on file."),
   salesPersonId: z.string().optional().describe("Salesperson user code, e.g. 'DL'"),
-  orderDueDate: z.string().optional().describe("Due date in ISO format"),
+  orderDueDate: z.string().optional().describe("DEPRECATED — writes to the legacy donotuse_orderduedate column, which the Prospect UI no longer surfaces. Has no visible effect. Use `priceExpiryDate` for the Price Expiry field on the Quote header instead."),
+  priceExpiryDate: z.string().optional().describe("Price Expiry date as YYYY-MM-DD (or full ISO datetime). Stored on Quote.EndDate — surfaces in the Prospect UI as 'Price Expiry' on the Quote header Entry tab. WHEN OMITTED, DEFAULTS TO today + 30 days at 12:00 UTC, matching the WCG rule that prices are held for 30 days from quote date."),
   customerOrderReference: z.string().optional().describe("Customer's PO or reference number"),
   memo: z.string().optional().describe("Internal notes"),
   projectCode: z.string().optional().describe("WCG project code"),
@@ -62,7 +97,8 @@ export const updateQuoteSchema = z.object({
   description: z.string().optional().describe("New quote description. IGNORED when `leadId` is also being set on this update — the opportunity's description is used instead. Used as a fallback only when the linked opportunity has no description on file."),
   salesPersonId: z.string().optional(),
   orderNumber: z.string().optional(),
-  orderDueDate: z.string().optional(),
+  orderDueDate: z.string().optional().describe("DEPRECATED — writes to the legacy donotuse_orderduedate column. Use `priceExpiryDate` instead."),
+  priceExpiryDate: z.string().optional().describe("Price Expiry date as YYYY-MM-DD (or full ISO datetime). Stored on Quote.EndDate — surfaces in the Prospect UI as 'Price Expiry'. Normalised to 12:00 UTC on the target date."),
   customerOrderReference: z.string().optional(),
   memo: z.string().optional(),
   projectCode: z.string().optional(),
@@ -130,7 +166,7 @@ export async function searchQuotes(args: z.infer<typeof searchQuotesSchema>): Pr
     `$expand=${expand}`,
     `$orderby=Created desc`,
     `$top=${args.top || 20}`,
-    `$select=QuoteId,Description,OrderNumber,CustomerOrderReference,DecimalHomeNetValue,DecimalHomeGrossValue,MarginPercentage,QuoteDate,OrderDueDate,Created,RecordLink`,
+    `$select=QuoteId,Description,OrderNumber,CustomerOrderReference,DecimalHomeNetValue,DecimalHomeGrossValue,MarginPercentage,QuoteDate,OrderDueDate,EndDate,Created,RecordLink`,
   ];
   if (filters.length > 0) {
     params.push(`$filter=${filters.join(" and ")}`);
@@ -153,7 +189,7 @@ export async function searchQuotes(args: z.infer<typeof searchQuotesSchema>): Pr
       `  Company: ${company} | Contact: ${contact}`,
       `  Status: ${status} | Salesperson: ${salesperson}`,
       `  Net: £${q.DecimalHomeNetValue?.toFixed(2) ?? "0.00"} | Gross: £${q.DecimalHomeGrossValue?.toFixed(2) ?? "0.00"} | Margin: ${q.MarginPercentage?.toFixed(1) ?? "N/A"}%`,
-      `  Created: ${q.Created?.substring(0, 10) || "N/A"} | Due: ${q.OrderDueDate?.substring(0, 10) || "N/A"}`,
+      `  Created: ${q.Created?.substring(0, 10) || "N/A"} | Price Expiry: ${q.EndDate?.substring(0, 10) || "(not set)"}`,
       `  Link: ${q.RecordLink || "N/A"}`,
     ].join("\n");
   });
@@ -188,7 +224,7 @@ export async function getQuote(args: z.infer<typeof getQuoteSchema>): Promise<st
     `**Customer Ref:** ${quote.CustomerOrderReference || "N/A"}`,
     `**Project Code:** ${quote.ProjectCode || "N/A"}`,
     `**Created:** ${quote.Created?.substring(0, 10) || "N/A"}`,
-    `**Due Date:** ${quote.OrderDueDate?.substring(0, 10) || "N/A"}`,
+    `**Price Expiry:** ${quote.EndDate?.substring(0, 10) || "(not set — expected 30 days from quote create date)"}`,
     `**Discount:** ${quote.OverallDiscountPercentage ?? 0}%`,
     `**Memo:** ${quote.Memo || "(none)"}`,
     "",
@@ -273,6 +309,8 @@ export async function createQuote(args: z.infer<typeof createQuoteSchema>): Prom
   if (resolvedDescription !== undefined) body.Description = resolvedDescription;
   if (args.salesPersonId !== undefined) body.SalesPersonId = args.salesPersonId;
   if (args.orderDueDate !== undefined) body.OrderDueDate = args.orderDueDate;
+  // Price Expiry — always populated (defaults to today + 30 days when caller omits priceExpiryDate)
+  body.EndDate = computePriceExpiry(args.priceExpiryDate);
   if (args.customerOrderReference !== undefined) body.CustomerOrderReference = args.customerOrderReference;
   if (args.memo !== undefined) body.Memo = args.memo;
   if (args.projectCode !== undefined) body.ProjectCode = args.projectCode;
@@ -330,6 +368,7 @@ export async function updateQuote(args: z.infer<typeof updateQuoteSchema>): Prom
   if (fields.salesPersonId !== undefined) body.SalesPersonId = fields.salesPersonId;
   if (fields.orderNumber !== undefined) body.OrderNumber = fields.orderNumber;
   if (fields.orderDueDate !== undefined) body.OrderDueDate = fields.orderDueDate;
+  if (fields.priceExpiryDate !== undefined) body.EndDate = computePriceExpiry(fields.priceExpiryDate);
   if (fields.customerOrderReference !== undefined) body.CustomerOrderReference = fields.customerOrderReference;
   if (fields.memo !== undefined) body.Memo = fields.memo;
   if (fields.projectCode !== undefined) body.ProjectCode = fields.projectCode;
