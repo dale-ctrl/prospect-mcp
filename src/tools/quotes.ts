@@ -309,8 +309,6 @@ export async function createQuote(args: z.infer<typeof createQuoteSchema>): Prom
   if (resolvedDescription !== undefined) body.Description = resolvedDescription;
   if (args.salesPersonId !== undefined) body.SalesPersonId = args.salesPersonId;
   if (args.orderDueDate !== undefined) body.OrderDueDate = args.orderDueDate;
-  // Price Expiry — always populated (defaults to today + 30 days when caller omits priceExpiryDate)
-  body.EndDate = computePriceExpiry(args.priceExpiryDate);
   if (args.customerOrderReference !== undefined) body.CustomerOrderReference = args.customerOrderReference;
   if (args.memo !== undefined) body.Memo = args.memo;
   if (args.projectCode !== undefined) body.ProjectCode = args.projectCode;
@@ -323,6 +321,29 @@ export async function createQuote(args: z.infer<typeof createQuoteSchema>): Prom
   if (args.deliveryCountry !== undefined) body.DeliveryCountry = args.deliveryCountry;
 
   const created = await client.post<Quote>("Quotes", body);
+
+  // Price Expiry write — DELIBERATELY a follow-up PATCH, not part of the POST body.
+  // Quote.EndDate has no `meta:UpdateVisibility="common"` attribute in the OData
+  // metadata (reference/prospect-metadata.xml line ~11047), which defaults to
+  // "never" — so the POST handler silently DROPS any EndDate included in the
+  // initial body. The Prospect UI itself uses this two-step pattern: create
+  // first, then PATCH the date in afterwards. Verified 2026-05-19 by
+  // inspecting the UI's Network tab on quote 15493 — PATCH payload was
+  // `{"EndDate":"<ISO>"}` against the existing quote's PK.
+  //
+  // Same metadata-lies pattern this codebase has hit before — see CHANGELOG
+  // 1.3.2 (Notepad FKs), 1.4.0 (Enquiry FKs), 1.5.0 (CampaignActivityContact).
+  // PATCH accepts what POST ignores. The 1-extra-round-trip cost is unavoidable
+  // until Prospect fixes the metadata.
+  const priceExpiry = computePriceExpiry(args.priceExpiryDate);
+  let priceExpiryWritten = true;
+  try {
+    await client.patch<Quote>("Quotes", created.QuoteId, { EndDate: priceExpiry });
+  } catch (err) {
+    // Don't fail the whole create over a Price Expiry write — surface the
+    // problem in the response so the caller knows to set it manually in the UI.
+    priceExpiryWritten = false;
+  }
 
   const descriptionNote =
     descriptionSource === "opportunity"
@@ -338,6 +359,7 @@ export async function createQuote(args: z.infer<typeof createQuoteSchema>): Prom
     `**Contact:** ${created.ContactId}`,
     `**Status:** ${created.StatusId}`,
     `**Created:** ${created.Created?.substring(0, 10) || "now"}`,
+    `**Price Expiry:** ${priceExpiryWritten ? priceExpiry.substring(0, 10) : "❌ failed to write — please set manually in the Prospect UI"}`,
     `**CRM Link:** ${created.RecordLink || "N/A"}`,
     "",
     `Next: Use **add_quote_line** with QuoteId ${created.QuoteId} to add line items.`,

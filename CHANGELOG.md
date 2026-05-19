@@ -6,6 +6,17 @@ The format is based on Keep a Changelog, and this project adheres to Semantic Ve
 
 ## [Unreleased]
 
+## [1.12.1] - 2026-05-19
+### Fixed
+- **`create_quote` now actually writes Price Expiry.** v1.12.0 set `EndDate` in the initial POST body, but Prospect's OData layer silently drops it because `Quote.EndDate` has no `meta:UpdateVisibility="common"` attribute in the metadata (line ~11047 of the bundled `prospect-metadata.xml`) — absence of that attribute defaults to "never" on this tenant, so any value in the POST body is rejected without error. Net effect: every quote created via v1.12.0 still came up with Price Expiry blank (year 0000), same as pre-v1.12.0 — verified 2026-05-19 by Dale immediately after the v1.12.0 deploy.
+
+  The fix is a two-step pattern: POST the quote without `EndDate`, then PATCH `EndDate` against the new QuoteId. The Prospect UI uses the same two-step pattern (verified via Network-tab inspection on quote 15493 — the UI's PATCH payload is `{"EndDate":"<ISO>"}` against the existing quote's PK). PATCH accepts what POST silently ignores. The follow-up PATCH is wrapped in a try/catch so a Price Expiry write failure surfaces in the response message rather than aborting the whole quote creation — the caller can then set the field manually in the UI as a fallback.
+
+  The success message returned by `create_quote` now also shows the Price Expiry that was written (or a "❌ failed — set manually" indicator if the PATCH failed), so callers can immediately see whether the field landed.
+
+### Why this slipped past v1.12.0 testing
+Same metadata-lies pattern this codebase has hit several times before — see CHANGELOG 1.3.2 (Notepad FKs), 1.4.0 (Enquiry FKs), 1.5.0 (CampaignActivityContact), 1.6.0 (Division.CompanyId). The Prospect metadata flags many writable fields as `UpdateVisibility="never"` (or omits the attribute entirely, which defaults to "never") despite the API actually accepting them on PATCH. The v1.12.0 implementation assumed POST and PATCH had symmetric write permissions; in this case POST is stricter. Should have known better — the existing CHANGELOG explicitly lists this as a recurring pitfall.
+
 ## [1.12.0] - 2026-05-19
 ### Added
 - **Price Expiry support on `create_quote` and `update_quote`.** New optional `priceExpiryDate` parameter (accepts `YYYY-MM-DD` or full ISO datetime). Writes to `Quote.EndDate` — the column the Prospect UI surfaces as **"Price Expiry"** on the Quote header Entry tab. When omitted on `create_quote`, defaults to today + 30 days, matching Prospect's tenant-wide `Quote expiry default days = 30` system option and the WCG rule that prices are held for 30 days from quote date.
