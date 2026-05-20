@@ -164,12 +164,32 @@ Review the entire conversation from this session. Extract and organise:
      gh release create vX.Y.Z --notes "<one-line summary>" --latest
      ```
 
-8. **Tell the user what teammates need to do** to get the update:
-   - **After the Release is published**, Customize → Plugins → `<plugin-name>` shows an enabled
-     Update button. Teammates click it, then fully restart Cowork (quit via system tray + Task
-     Manager check, not just close the window), and the new content appears.
-   - **Before the Release is published**, the Update button is greyed out — the commit on `main`
-     is invisible to teammates' Cowork installs regardless of the tag's existence.
+8. **Tell the user what teammates need to do** to get the update — CRITICAL: the Cowork
+   "Update" button is a NO-OP for the marketplace-clone install model. Teammates MUST manually
+   `git pull` the marketplace clone on their own machine, or they'll stay pinned on whatever
+   version they first installed.
+
+   For each teammate, in PowerShell (Windows) — they replace `<their-username>`:
+
+   ```
+   cd "C:\Users\<their-username>\.claude\plugins\marketplaces\wcg-prospect"
+   git pull origin main
+   ```
+
+   Then a full Claude Desktop restart:
+   - Right-click tray icon → Quit
+   - Task Manager → kill any lingering `node.exe` processes (the MCP runs as `node.exe`)
+   - Relaunch Claude Desktop
+
+   The marketplace clone is the directory `claude_desktop_config.json` loads the MCP from
+   (`args` points at `.claude\plugins\marketplaces\wcg-prospect\dist\index.js`). Without the
+   manual pull, the local clone stays at whatever commit it had when installed — even after
+   clicking Cowork's "Update", even after publishing a GitHub Release, even after a Claude
+   Desktop restart. Verified 2026-05-19: v1.12.0 and v1.12.1 sat unused for two hours of
+   debugging because the marketplace clone was still at v1.11.0 and nobody knew.
+
+   The published GitHub Release is still required (it's how Cowork's marketplace metadata
+   detects the new version exists), but it's not sufficient on its own.
 
 ## Step 3b: Create a new task-specific skill
 
@@ -244,10 +264,13 @@ Write them as explicit warnings.]
    ```
 
    **Then create a GitHub Release for the tag** — see Step 3a step 7 for the URL format and
-   the `gh release create` alternative. This is the trigger that makes teammates' Update button
-   work; without it the new skill is invisible to them.
+   the `gh release create` alternative. The published Release is required for Cowork's
+   marketplace metadata to surface the new version.
 
-7. **Tell the user about teammate propagation** — same as Step 3a step 8.
+7. **Tell the user about teammate propagation** — same as Step 3a step 8. CRITICAL: teammates
+   MUST manually `git pull` their marketplace clone (Cowork's "Update" button does not pull
+   updates to the marketplace-clone directory the MCP loads from). The full sequence is in
+   Step 3a step 8.
 
 ## Step 4: Capture session-level knowledge that doesn't belong in the skill
 
@@ -305,8 +328,17 @@ Example:
 >
 >    Add brief notes. Tick "Set as the latest release". Click "Publish release".
 >
->    Teammates: after the Release is published, Customize → Plugins → prospect-crm → Update
->    button becomes enabled. Click it, restart Cowork, the new content appears.
+>    Teammates: Cowork's "Update" button is a NO-OP — they need to manually `git pull` their
+>    marketplace clone in PowerShell:
+>
+>    ```
+>    cd "C:\Users\<their-username>\.claude\plugins\marketplaces\wcg-prospect"
+>    git pull origin main
+>    ```
+>
+>    Then fully restart Claude Desktop (tray → Quit, kill any orphaned `node.exe` in Task
+>    Manager, relaunch). Confirm afterwards by re-fetching a tool schema — new fields should
+>    appear.
 
 ## First-time setup
 
@@ -369,6 +401,17 @@ When writing or updating task-specific skills, follow these principles:
 
 ## Changelog
 
+- **2026-05-19 (v4)** — Discovered Cowork's "Update" button is a NO-OP for the
+  marketplace-clone install model. Despite a properly published GitHub Release for v1.12.0
+  and v1.12.1, every teammate's MCP stayed pinned at v1.11.0 because
+  `claude_desktop_config.json` loads from
+  `.claude\plugins\marketplaces\wcg-prospect\dist\index.js` and Cowork's Update button does
+  not git-pull that directory. Step 3a step 7/8 and Step 3b step 6/7 now print explicit
+  `git pull` instructions for teammates as a REQUIRED part of every deployment. Step 5
+  example deployment sequence updated to include the manual-pull step. The published GitHub
+  Release is still required (per the v3 lesson) but is not sufficient on its own. Codified
+  during the same Grenfell Hall session where the v1.12.0 deploy initially failed silently
+  for two hours of debugging until we found the marketplace clone was stale.
 - **2026-05-18 (v3)** — Added GitHub Releases to the deployment sequence. Cowork's plugin install
   mechanism detects new versions via GitHub **Releases**, NOT just tags — without a published
   Release, teammates' Update button stays greyed out and changes are invisible to them. Step 3a

@@ -6,6 +6,28 @@ The format is based on Keep a Changelog, and this project adheres to Semantic Ve
 
 ## [Unreleased]
 
+## [1.13.0] - 2026-05-19
+### Changed — skill content updates from the Grenfell Hall retrospective
+
+`skills/prospect-crm-create-quote/SKILL.md` updated (v4):
+- **Pitfall 7 fully rewritten** — Price Expiry resolution. Previously said the MCP couldn't write it; now reflects v1.12.1 reality (auto-set via `Quote.EndDate` to today + 30 days, with `priceExpiryDate` parameter for overrides). Earlier guidance that the field lived in `QuoteXtras.StandardDateField1-5` was wrong — confirmed via dev-tools inspection of the Prospect UI's save sequence on quote 15493.
+- **Step 9 removed** — the manual "remind user to set Price Expiry in UI" step is no longer needed because the MCP sets it automatically.
+- **Step 6 (delivery / carriage) expanded** with the full WCG taxonomy: Versa mobile tables → `VCARRIAGEMOB` tiered on table count; Versa Wall Pockets → `VWPINST-<region>` fixed per UK region; Interiors → `DEL,RP&ASSEM` / `DEL&ASSEM` / `DELIVERY` × `-E` (education) / `-C` (commercial) suffix. Plus the carriage line POSITION rule (always last in its group).
+- **New Pitfall 13** — `update_quote_line` zeroes the price on £0-catalogue product-linked lines (service codes + Versa carriage SKUs). Workaround: re-create via `add_quote_line` + delete old in UI. Observed during the Grenfell Hall session where VCARRIAGEMOB lines kept settling at £0 after every `update_quote_line` call.
+- **New Pitfall 14** — sequence collisions across groups scramble display order. The Prospect UI sorts by Sequence GLOBALLY, not per-group, so collisions between e.g. "Option 1 line 1" and "Option 2 line 1" (both at sequence=10) cause unpredictable shuffling. Mitigation: use big gaps between groups (10/20/30 for group 1, 100/110/120/130 for group 2).
+- Step 3 note updated to reflect Price Expiry auto-set behaviour.
+- Verification step 3 updated to check the response's `**Price Expiry:**` line instead of reminding the user.
+
+`skills/wcg-retrospective/SKILL.md` updated (v4):
+- **Step 3a step 7/8 and Step 3b step 6/7 rewritten** — Cowork's "Update" button is a NO-OP for the marketplace-clone install model. Teammates MUST manually `git pull` `.claude\plugins\marketplaces\wcg-prospect` on their own machine for every release. The published GitHub Release is still required (per the v3 lesson) but is not sufficient on its own. Step 5 example deployment sequence updated with the manual-pull commands for teammates.
+- Discovered 2026-05-19: v1.12.0 and v1.12.1 sat unused for two hours of Price Expiry debugging because the marketplace clone was stuck at v1.11.0 despite a clean Release publish, Cowork Update click, and full Claude Desktop restart. The deploy workflow now explicitly includes the manual-pull step.
+
+### Why
+Both skills had drifted from operational reality. The create-quote skill was telling future Claude sessions to remind users about Price Expiry that the MCP now handles automatically, and the retrospective skill was telling Claude to instruct teammates to use a Cowork button that doesn't do anything. Codifying these into the skill body (not just the knowledge base) means every future quote / retrospective session inherits the corrections without needing them re-discovered.
+
+### No code changes
+This is a content-only release — no `src/` or `dist/` changes. Plugin version bumped to 1.13.0 from 1.12.1 because Cowork uses the plugin version to detect skill updates, and a matching tag + Release is required for teammates' marketplace metadata clone to see the new version.
+
 ## [1.12.1] - 2026-05-19
 ### Fixed
 - **`create_quote` now actually writes Price Expiry.** v1.12.0 set `EndDate` in the initial POST body, but Prospect's OData layer silently drops it because `Quote.EndDate` has no `meta:UpdateVisibility="common"` attribute in the metadata (line ~11047 of the bundled `prospect-metadata.xml`) — absence of that attribute defaults to "never" on this tenant, so any value in the POST body is rejected without error. Net effect: every quote created via v1.12.0 still came up with Price Expiry blank (year 0000), same as pre-v1.12.0 — verified 2026-05-19 by Dale immediately after the v1.12.0 deploy.

@@ -157,8 +157,10 @@ Notes:
 - Always set `salesPersonId` explicitly.
 - The Quote Template setting flows from the opp's LeadXtra StandardDropdownField3 — visible on
   the quote header as "Opportunity Custom Fields Quote Template".
-- **Price Expiry CANNOT be set via the MCP** — see Pitfall 7. Always remind the user to set it
-  in the Prospect UI to (CreatedDate + 30 days).
+- **Price Expiry is auto-set** on every quote raised via `create_quote` from MCP v1.12.1+ —
+  defaults to today + 30 days, written to `Quote.EndDate` via a follow-up PATCH after the
+  initial POST. Override via the optional `priceExpiryDate` parameter (`YYYY-MM-DD`). See
+  Pitfall 7.
 
 ### 4. Create the group(s) FIRST
 
@@ -210,15 +212,45 @@ add_quote_line(
 When `productItemId` is supplied, the server will auto-copy the product's `WebExtendedDescription`
 into the line's `ExtendedDescription`. PRESERVE IT — see Pitfall 3.
 
-### 6. Add delivery / assembly line
+### 6. Add delivery / assembly / carriage line
 
-Use the appropriate WCG service code (table in Business Rules below) — or, if the opp's
-LeadXtra Delivery Type is set, use that.
+**Every quote needs one.** The SKU depends on (a) Versa vs Interiors, (b) for Versa, mobile
+tables vs Wall Pockets, (c) for Interiors, education vs commercial customer. Check the opp's
+LeadXtra **Delivery Type** first — if populated, use that SKU. If blank, infer from product
+mix + customer type, or ask via AskUserQuestion.
 
-Always set `price` explicitly even if £0.00, otherwise it pulls as null.
+**Versa quotes:**
+- Mobile tables (Versa Benchmark, ConverTable, any folding / wheeled dining table) →
+  `VCARRIAGEMOB` — sell price is TIERED ON TOTAL TABLE COUNT (not customer location):
+  1-3 = £300, 4-5 = £400, 6-10 = £500, 11-15 = £700, 16+ = £950. Cost £100.
+  Catalogue sell is £0 because the real charge varies — set `price` explicitly per the matrix.
+- Wall Pockets (Versa wall-mounted folding tables) → `VWPINST-<region>` — fixed price per UK
+  region (e.g. VWPINST-LON £2080 Greater London, VWPINST-SE £2086 South East, VWPINST-SWE
+  £1425 South West). Cost £250 across UK SKUs. See KB lesson for the full regional table.
 
-The delivery line can sit at the bottom of the main group OR in its own "Delivery & Install"
-group — confirm with the user when discussing grouping in Step 2.
+**Interiors quotes (non-Versa):**
+Three service tiers, each with `-E` (education customers — schools, academies, MATs, colleges,
+universities) or `-C` (commercial) suffix:
+- `DEL,RP&ASSEM-E-1` / `DEL,RP&ASSEM-C` — Delivery, Room Placement AND Assembly (full white-glove)
+- `DEL&ASSEM-E-1` / `DEL&ASSEM-C` — Delivery + Assembly (ground floor only)
+- `DELIVERY-E-1` / `DELIVERY-C` — Delivery only
+
+All Interiors codes catalogue at £0 — set `price` explicitly per the agreed charge on the opp.
+
+**Carriage line POSITION rule — always last in its group:**
+- Single-group quote → carriage is the bottom line of the only group.
+- Multi-group "option" quote (Option 1 / Option 2) → carriage line appears at the end of EACH
+  group as that group's last item, so each option totals as a complete bundle the customer
+  can pick between.
+- Multi-group quote where carriage applies once across the whole quote → use a dedicated
+  final group named "Delivery & Install" with the carriage as the only line, sequenced AFTER
+  all product groups.
+
+Set carriage `sequence` to the next round number AFTER the highest product-line sequence in
+that group. See also Pitfall 14 on sequence collisions across groups.
+
+Always set `price` explicitly — never let it pull as £0 from the catalogue (and once set,
+don't try to fix it via `update_quote_line` — see Pitfall 13).
 
 ### 7. Populate QuoteLine custom fields via `update_quote_line_xtra`
 
@@ -254,16 +286,7 @@ ALWAYS call `get_quote(quoteId=<id>)` at the end to confirm:
 If a value differs from what was passed in, FLAG IT — don't silently override. The user may
 be editing the quote in the UI concurrently (Pitfall 1).
 
-### 9. Remind the user about Price Expiry
-
-At the very end of the session, tell the user explicitly:
-
-> "Quote <id> created — please set Price Expiry to YYYY-MM-DD (30 days from today) in the
-> Prospect UI. The MCP can't set this field directly."
-
-Non-negotiable — see Pitfall 7.
-
-### 10. Capture any learnings
+### 9. Capture any learnings
 
 If during the session the user corrected you, or you discovered something about a customer /
 supplier / product / process that future quotes need to know, save it BEFORE ending the session:
@@ -345,20 +368,36 @@ assign it to a group — the user has to drag it in manually.
 - ALWAYS pass `groupId` to every `add_quote_line` call (Step 5).
 - Confirm the group structure with the user up-front via AskUserQuestion (Step 2).
 
-### Pitfall 7 — Price Expiry cannot be set via the MCP
+### Pitfall 7 — Price Expiry: now auto-set via Quote.EndDate (RESOLVED v1.12.1+)
 
-The WCG Prospect UI displays a **Price Expiry** date field on the Quote header. WCG rule:
-Price Expiry should always be 30 days from quote created date.
+RESOLVED in MCP v1.12.1 (2026-05-19). Price Expiry is stored on `Quote.EndDate` (database
+column `donotuse_enddate` — the `donotuse_` prefix is misleading, the column is actively
+repurposed for Price Expiry). It is NOT in QuoteXtras (earlier guidance in v1-v2 of this skill
+was wrong — verified by setting the field in the UI and observing QuoteXtras stayed empty).
 
-**Do NOT use the MCP's `update_quote(orderDueDate=...)` parameter.** `orderDueDate` maps to the
-column `donotuse_orderduedate` — a deprecated/legacy field the UI no longer surfaces. The
-write succeeds but the value never appears in the UI.
+`create_quote` now automatically sets `Quote.EndDate` to today + 30 days via a follow-up
+PATCH after the initial POST. The optional `priceExpiryDate` parameter (`YYYY-MM-DD`)
+overrides this default. The success message confirms the date that was written:
 
-Price Expiry is most likely stored in one of the QuoteXtras `StandardDateField1-5` slots, but
-the MCP has **no `update_quote_xtra` writer** for header-level custom fields. So Price Expiry
-cannot currently be set via the MCP.
+```
+**Price Expiry:** 2026-06-18
+```
 
-**Mitigation:** at end of session, tell the user explicitly to set it in the UI.
+If the response shows `**Price Expiry:** ❌ failed to write — please set manually in the
+Prospect UI`, the follow-up PATCH errored and the user should set the field manually.
+
+Why the two-step pattern: Prospect's OData metadata flags `Quote.EndDate` as
+`UpdateVisibility="never"` (technically — it omits the attribute entirely, which defaults to
+"never" on this tenant), so the POST handler silently DROPS any EndDate in the initial body.
+PATCH accepts it. Same metadata-lies pattern this codebase has hit at v1.3.2 (Notepad FKs),
+v1.4.0 (Enquiry FKs), v1.5.0 (CampaignActivityContact), v1.6.0 (Division.CompanyId). Verified
+via dev-tools inspection of the Prospect UI's own save sequence on quote 15493 — the UI uses
+the same POST-then-PATCH pattern.
+
+**Do NOT use the MCP's `update_quote(orderDueDate=...)` parameter** — `orderDueDate` maps to
+`donotuse_orderduedate`, a DIFFERENT legacy column that the UI no longer surfaces. The write
+succeeds but the value never appears anywhere. The MCP descriptions on `orderDueDate` are
+marked DEPRECATED from v1.12.0+ for exactly this reason. Use `priceExpiryDate` instead.
 
 ### Pitfall 8 — `add_quote_line` quantity-0.002 bug
 
@@ -416,6 +455,68 @@ on the quote now. Especially important for SKU swaps, supplier changes, and pric
 When adding a replacement line via Pitfall 9's workflow, set `sequence` to match the line
 being replaced so the new line lands in the same display slot. Otherwise the quote re-orders
 mid-build and the user has to drag lines around in the UI.
+
+### Pitfall 13 — `update_quote_line` zeroes the price on £0-catalogue product-linked lines
+
+Service-code SKUs (Versa `VCARRIAGEMOB`, all WCG delivery codes `DELIVERY-E-1`,
+`DEL&ASSEM-E-1`, `DEL,RP&ASSEM-E-1`, `ROOM-PLACEMENT-E`, `CASUAL/ASSEM-E`,
+`ASSEMBLY & INSTALL`, etc.) are deliberately catalogued at £0 because the actual charge
+varies per quote. When you call `update_quote_line(lineId=..., price=700, ...)` on one of
+these lines, the server triggers a post-write recalc that re-pulls the £0 catalogue price
+and overwrites your £700 override. The MCP response says "Fields changed: ..., DecimalPrice,
+..." but the net effect is the line ends up at £0. Retrying with the same args does NOT
+recover it.
+
+`add_quote_line` honours the explicit `price` arg correctly — only `update_quote_line`
+triggers the recalc.
+
+**Workaround when you need to "edit" one of these lines** (e.g. to fix a wrong sequence or
+qty on an existing carriage line):
+
+1. State the workaround clearly in chat — "Re-adding carriage line because update_quote_line
+   would zero the price; please delete the old £0 line LineId X in the UI when done."
+2. Add a fresh line via `add_quote_line` with the right `price`, `groupId`, and `sequence`.
+   `add_quote_line` preserves the explicit price.
+3. Tell the user the LineId of the old £0 line so they can delete it manually in the Prospect
+   UI (since `delete_quote_line` is disabled on this tenant per Pitfall 9).
+4. After confirmation, re-run `get_quote` to verify only the new line remains for that
+   product.
+
+Observed 2026-05-19 on quote 15493 (Grenfell Hall) — `update_quote_line` repeatedly returned
+"DecimalPrice changed" but the £700 carriage lines kept settling at £0 until we re-created
+them via `add_quote_line`.
+
+### Pitfall 14 — Sequence collisions across groups scramble display order
+
+The Prospect UI sorts quote lines by `Sequence` GLOBALLY, not per-group. If you give both
+"Option 1 line 1" and "Option 2 line 1" the same `sequence=10`, the UI's tiebreaking shuffles
+them unpredictably. Observed 2026-05-19 on a multi-group "options" quote: Option 2's carriage
+line at `sequence=40` displayed BEFORE Option 2's ConverTable at `sequence=30` despite both
+being in group 2, because Option 1's carriage at `sequence=30` won the global tiebreak and
+shoved everything around.
+
+**Mitigation:** use globally unique sequence values across groups. Big gaps between groups:
+
+```
+Group 1 (Option 1):
+  product line 1:   sequence=10
+  product line 2:   sequence=20
+  carriage:         sequence=30
+
+Group 2 (Option 2):
+  product line 1:   sequence=100   ← big jump so no collision with group 1
+  product line 2:   sequence=110
+  product line 3:   sequence=120
+  carriage:         sequence=130
+
+Group 3 (Option 3):
+  product line 1:   sequence=200
+  ...
+```
+
+Especially important for multi-group "option" / "phase" quotes. If you fix this AFTER lines
+are created via `update_quote_line(..., sequence=...)`, be aware Pitfall 13 may zero out
+prices on £0-catalogue lines — preferable to get the sequence right at `add_quote_line` time.
 
 ## Business Rules
 
@@ -504,15 +605,43 @@ If the line-up changes mid-build, refresh the memo via `update_quote(memo=...)` 
 
 End every quote-creation session with:
 
-1. `get_quote(quoteId=<id>)` — confirm prices, quantities, groups, totals, delivery line,
-   Quote Template setting.
+1. `get_quote(quoteId=<id>)` — confirm prices, quantities, groups, totals, delivery / carriage
+   line at the bottom of its group, Quote Template setting, and Price Expiry populated.
 2. `get_xtra_fields(entityType='QuoteLineXtras', parentId=<lineId>)` for any line you set
    custom fields on — confirm stored values are correct.
-3. Remind the user to set **Price Expiry** in the UI to (created date + 30 days) — Pitfall 7.
+3. Confirm Price Expiry appears in the `create_quote` response — `**Price Expiry:** YYYY-MM-DD`.
+   If it shows `❌ failed to write`, the follow-up PATCH errored; ask the user to set the date
+   manually in the Prospect UI. See Pitfall 7.
 4. Save any new learnings via `save_quoting_lesson` (correct category) or `save_product_note`
-   — Step 10.
+   — Step 9.
 
 ## Changelog
+
+- **2026-05-19 (v4)** — Price Expiry resolved (it's `Quote.EndDate`, NOT QuoteXtras — earlier
+  Pitfall 7 was wrong). MCP v1.12.1+ auto-sets it on `create_quote` to today + 30 days via a
+  follow-up PATCH after the initial POST, with the optional `priceExpiryDate` parameter for
+  overrides. Step 9 (manual UI reminder) removed from the workflow — no longer needed.
+  Pitfall 7 fully rewritten with the new resolution and the metadata-lies explanation.
+  Step 3 note updated to reflect auto-set behaviour. Verification step 3 updated to check
+  the response's `**Price Expiry:**` line instead of reminding the user.
+
+  Step 6 (delivery / carriage line) expanded with the full taxonomy:
+  - Versa mobile tables → `VCARRIAGEMOB` tiered on table count (1-3 £300 ... 16+ £950).
+  - Versa Wall Pockets → `VWPINST-<region>` fixed per UK region.
+  - Interiors → `DEL,RP&ASSEM` / `DEL&ASSEM` / `DELIVERY` × `-E` (education) or `-C`
+    (commercial) suffix based on customer type.
+  - Carriage line POSITION rule: must always be the last line in its group. For multi-group
+    "option" quotes, carriage appears at the end of EACH group.
+
+  New Pitfall 13: `update_quote_line` zeroes the price on £0-catalogue product-linked lines
+  (all service codes / Versa carriage SKUs). Workaround: re-create via `add_quote_line` +
+  delete old in UI. Observed during the Grenfell Hall session.
+
+  New Pitfall 14: sequence collisions across groups scramble display order — the Prospect UI
+  sorts by Sequence GLOBALLY, not per-group. Mitigation: use big gaps between groups
+  (10/20/30 for group 1, 100/110/120/130 for group 2, etc.).
+
+  Codified during the Grenfell Hall Versa options quote session (opp 15457 / quote 15493).
 
 - **2026-05-18 (v3)** — Reorganised knowledge layering. Stripped all customer/supplier/SKU
   specifics from the skill (these now live in `save_quoting_lesson` with `customer-<acct>` /
