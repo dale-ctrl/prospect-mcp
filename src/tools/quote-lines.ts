@@ -54,6 +54,33 @@ export const updateQuoteLineXtraSchema = z.object({
 
 // ─── Handlers ──────────────────────────────────────────────────
 
+// Raw-field write strategy (v1.16.0):
+//
+// The WCG Prospect tenant's QuoteLines endpoint has two write-path quirks
+// confirmed via probes against quote 15521 on 2026-05-21:
+//
+//   1. POST honours `DecimalPrice` and `DecimalCostPrice`, but the server's
+//      post-write automation ZEROES any `DecimalDiscountPercentage` sent on
+//      POST. The discount can't be set in the create body — must be applied
+//      via a follow-up PATCH.
+//
+//   2. PATCH on any `Decimal*` computed field returns HTTP 500 ("An error
+//      occurred"). The only write path that PATCH accepts is the raw
+//      integer backing fields: `Price` (Int64, ×100), `Discount` (Int32,
+//      ×100), `CostPrice` (Int64, ×100). The metadata marks these as
+//      UpdateVisibility="never" but in practice they're writable and they
+//      bypass the recalc cleanly.
+//
+// Scale: pounds × 100 (SellDecimals=2 / CostDecimals=2), percentage × 100.
+// Round explicitly to dodge IEEE-754 multiplication artefacts on values
+// like £100.005 or 5.55%.
+function poundsToRaw(pounds: number): number {
+  return Math.round(pounds * 100);
+}
+function pctToRaw(pct: number): number {
+  return Math.round(pct * 100);
+}
+
 export async function addQuoteLine(args: z.infer<typeof addQuoteLineSchema>): Promise<string> {
   const client = getClient();
 
@@ -68,11 +95,12 @@ export async function addQuoteLine(args: z.infer<typeof addQuoteLineSchema>): Pr
   if (args.sequence !== undefined) body.Sequence = args.sequence;
   if (args.groupId !== undefined) body.GroupId = args.groupId;
 
-  // Try the Decimal* fields first for price/qty/cost.
-  // If Prospect rejects computed fields on write, fall back to raw integer fields.
+  // POST honours DecimalPrice / DecimalCostPrice — keep using them here.
   if (args.price !== undefined) body.DecimalPrice = args.price;
   if (args.costPrice !== undefined) body.DecimalCostPrice = args.costPrice;
-  if (args.discountPercentage !== undefined) body.DecimalDiscountPercentage = args.discountPercentage;
+  // DecimalDiscountPercentage is deliberately NOT in the POST body — the
+  // server zeroes it on create regardless. Discount is applied below via
+  // a follow-up PATCH on the raw `Discount` Int32 field.
 
   // Quantity — DecimalQuantity is computed/read-only, so we need the raw fields.
   // Prospect stores quantity as Int64 with 3 implied decimals (QuantityDecimals=3).
@@ -84,6 +112,18 @@ export async function addQuoteLine(args: z.infer<typeof addQuoteLineSchema>): Pr
 
   const created = await client.post<QuoteLine>("QuoteLines", body);
 
+  // Follow-up PATCH for discount — only path that survives the POST recalc.
+  if (args.discountPercentage !== undefined && args.discountPercentage !== 0 && created.LineId) {
+    await client.patch<QuoteLine>("QuoteLines", created.LineId, {
+      Discount: pctToRaw(args.discountPercentage),
+    });
+  }
+
+  // For the response, prefer the args values where supplied — `created`
+  // is stale w.r.t. discount after the follow-up PATCH, and the user's
+  // intent is the most useful display anyway.
+  const displayDiscount = args.discountPercentage ?? created.DecimalDiscountPercentage ?? 0;
+
   return [
     `✅ Line added to Quote #${args.quoteId}`,
     `**LineId:** ${created.LineId}`,
@@ -92,7 +132,7 @@ export async function addQuoteLine(args: z.infer<typeof addQuoteLineSchema>): Pr
     `**Qty:** ${created.DecimalQuantity ?? args.quantity}`,
     `**Price:** £${created.DecimalPrice?.toFixed(2) ?? args.price?.toFixed(2) ?? "N/A"}`,
     `**Net Value:** £${created.DecimalNetValue?.toFixed(2) ?? "pending"}`,
-    `**Discount:** ${created.DecimalDiscountPercentage?.toFixed(1) ?? "0"}%`,
+    `**Discount:** ${displayDiscount.toFixed(1)}%`,
   ].join("\n");
 }
 
@@ -103,9 +143,12 @@ export async function updateQuoteLine(args: z.infer<typeof updateQuoteLineSchema
   const body: Record<string, unknown> = {};
   if (fields.description !== undefined) body.Description = fields.description;
   if (fields.extendedDescription !== undefined) body.ExtendedDescription = fields.extendedDescription;
-  if (fields.price !== undefined) body.DecimalPrice = fields.price;
-  if (fields.costPrice !== undefined) body.DecimalCostPrice = fields.costPrice;
-  if (fields.discountPercentage !== undefined) body.DecimalDiscountPercentage = fields.discountPercentage;
+  // Raw integer backing fields for price/cost/discount — see the module-
+  // level comment above. PATCH on the Decimal* equivalents returns HTTP 500
+  // on this tenant.
+  if (fields.price !== undefined) body.Price = poundsToRaw(fields.price);
+  if (fields.costPrice !== undefined) body.CostPrice = poundsToRaw(fields.costPrice);
+  if (fields.discountPercentage !== undefined) body.Discount = pctToRaw(fields.discountPercentage);
   if (fields.taxCode !== undefined) body.TaxCode = fields.taxCode;
   if (fields.sequence !== undefined) body.Sequence = fields.sequence;
 

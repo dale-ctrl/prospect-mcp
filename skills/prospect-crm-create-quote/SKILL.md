@@ -458,26 +458,27 @@ When adding a replacement line via Pitfall 9's workflow, set `sequence` to match
 being replaced so the new line lands in the same display slot. Otherwise the quote re-orders
 mid-build and the user has to drag lines around in the UI.
 
-### Pitfall 13 — `update_quote_line` resets `price` to £0 on product-linked lines whose catalogue price is £0
+### Pitfall 13 — RESOLVED in v1.16.0 — `update_quote_line` price clobbering
 
-Observed 2026-05-19 on quote 15493 (Grenfell Hall) with VCARRIAGEMOB. The Versa carriage SKUs
-and the standard WCG delivery service codes (DELIVERY-E-1, DEL&ASSEM-E-1, DEL,RP&ASSEM-E-1,
-ROOM-PLACEMENT-E, CASUAL/ASSEM-E, ASSEMBLY & INSTALL, etc.) are deliberately catalogued at £0
-because the real charge varies per quote — the sell price is captured per-quote on `add_quote_line`.
+Until MCP v1.16.0, `update_quote_line(lineId=..., price=X, ...)` would either:
 
-When you then call `update_quote_line(lineId=..., price=700, ...)` on one of these lines, the
-MCP wrapper / server triggers a post-write recalc that re-pulls the product's catalogue price
-(£0) and overwrites your £700. Re-running `update_quote_line` with the same args does NOT fix it.
+- **Silently revert** the line's price to the product's catalogue value (originally observed
+  2026-05-19 on quote 15493 / Grenfell Hall with VCARRIAGEMOB — a £0-catalogue carriage SKU
+  whose £700 update reverted to £0), OR
+- **Return HTTP 500** ("An error occurred") with no body detail (observed 2026-05-21 on quote
+  15521 / Drayton Manor with Y15607 — £337.11 catalogue / £100 attempted update).
 
-`add_quote_line` does NOT have this bug — it honours the explicit `price` arg correctly.
+Both failure modes traced to the same root cause: the wrapper PATCHed the OData `Decimal*`
+computed fields, which the server either re-derives from catalogue or rejects outright.
 
-**Workaround:**
-1. NEVER call `update_quote_line` on a product-linked line whose catalogue price is £0 — not
-   for re-sequencing, not for price corrections, not even for description tweaks.
-2. To fix a botched line of this type: add a new line via `add_quote_line` (with the right
-   price + group + sequence), and ask the user to manually delete the £0 line in the Prospect
-   UI (since `delete_quote_line` is disabled — see Pitfall 9).
-3. To re-sequence a carriage line, do it at create-time on `add_quote_line`.
+**Fixed in MCP v1.16.0** — `update_quote_line` now PATCHes the raw integer backing fields
+`Price` (pounds × 100, Int64), `Discount` (percentage × 100, Int32), and `CostPrice`
+(pounds × 100, Int64) instead. The raw fields persist cleanly through the server's
+post-write recalc on every product-linked line tested, including £0-catalogue carriage SKUs.
+No follow-up call needed.
+
+`add_quote_line` still POSTs `DecimalPrice` directly (POST honours it), with a follow-up
+PATCH for discount only — see Pitfall 15.
 
 ### Pitfall 14 — No `update_quote_line_group` writer; `add_quote_line_group` defaults not honoured
 
@@ -501,7 +502,21 @@ showPriceColumn?, showSubtotal?, showDiscount?, showSeparateTotals?, showDiscoun
 newPage?, newTable?)` — the UI dialog exposes all those toggles so the underlying API endpoint
 accepts them.
 
-## Business Rules
+### Pitfall 15 — RESOLVED in v1.16.0 — `discountPercentage` silently dropped
+
+Until MCP v1.16.0, both `add_quote_line(discountPercentage=N)` and
+`update_quote_line(discountPercentage=N)` returned success but the line came back with
+`DecimalDiscountPercentage=0`. Discovered 2026-05-21 on quote 15521 (Drayton Manor — 5% volume
+discount on Option 2 silently dropped). Empirical probing confirmed the WCG tenant's server-
+side automation zeroes `DecimalDiscountPercentage` on every POST regardless of headers tried,
+and rejects PATCH on the field outright with HTTP 500.
+
+**Fixed in MCP v1.16.0** — the wrapper now writes the raw `Discount` Int32 backing field
+(percentage × 100) via a follow-up PATCH on `add_quote_line`, and via direct PATCH on
+`update_quote_line`. The raw field bypasses the recalc and the 500 cleanly. The
+`discountPercentage` parameter on both tools now works.
+
+No manual UI step needed for line discounts. The `discountPercentage` arg behaves as documented.
 
 ### Default pricing rule — SKU prefix
 
@@ -645,6 +660,17 @@ End every quote-creation session with:
 
 ## Changelog
 
+- **2026-05-21 (v5)** — Pitfalls 13 and 15 RESOLVED in MCP v1.16.0. The WCG tenant's
+  server-side QuoteLines write-path was clobbering both price and discount via two related
+  failure modes: (a) POST zeroes `DecimalDiscountPercentage` regardless of headers tried
+  (probed 5 Prefer variants — none worked), and (b) PATCH on any `Decimal*` computed field
+  returns HTTP 500. Original Pitfall 13 framing ("silent revert to catalogue") matched the
+  2026-05-19 Grenfell Hall observation; current observation on Y15607 (£337.11 catalogue) is
+  HTTP 500 — both behaviours documented and now bypassed. Fix: switch `update_quote_line` to
+  PATCH the raw integer backing fields (`Price` / `Discount` / `CostPrice`, each × 100 scale),
+  and add a follow-up PATCH on `add_quote_line` for the `Discount` field when discount > 0.
+  `discountPercentage` parameter on both tools now works. End-to-end smoke-tested against
+  quote 15521. Discovered during opp 15503 / quote 15521 (Drayton Manor High School).
 - **2026-05-21 (v4)** — Codified Quote Template → group display-toggle mapping at Step 4
   ("Itemised" → showPriceColumn=true; "Non Itemised" → showPriceColumn=false; "Subtotalled" →
   showSubtotal=true; combinations read literally). Applies to every group on a quote. Added
