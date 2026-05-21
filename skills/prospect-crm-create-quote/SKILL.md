@@ -1,13 +1,14 @@
 ---
 name: prospect-crm-create-quote
 description: >
-  Create a Prospect CRM quote linked to an opportunity, with correct line pricing, customer-specific
-  price recognition, preserved product descriptions, properly populated WCG QuoteLine custom
-  fields (Colour, Colour (Extended), Supplier, etc.), and lines grouped into named sections.
-  Trigger whenever the user asks to create, raise, build, or generate a quote against an
-  opportunity, lead, or directly for a customer — especially WCG furniture, Versa, or interiors
-  quotes with product codes, or any request mentioning quote lines with colour, finish, or
-  supplier details. Also trigger for adding delivery / assembly / room-placement lines to a quote.
+  Create a Prospect CRM quote linked to an opportunity, with correct line pricing,
+  customer-specific price recognition, preserved product descriptions, properly populated
+  WCG QuoteLine custom fields (Colour, Colour (Extended), Supplier, etc.), and lines
+  grouped into named sections. Trigger whenever the user asks to create, raise, build,
+  or generate a quote against an opportunity, lead, or directly for a customer —
+  especially WCG furniture, Versa, or interiors quotes with product codes, or any request
+  mentioning quote lines with colour, finish, or supplier details. Also trigger for adding
+  delivery / assembly / room-placement lines to a quote.
 ---
 
 # Create a Quote in Prospect CRM
@@ -25,8 +26,12 @@ Step 1 of every quote.
 - Key MCP tools used by this skill:
   - `get_opportunity` — pull opp context (company, contact, salesperson, value, situation summary)
   - `get_xtra_fields(entityType='LeadXtras', parentId=<opp>)` — **REQUIRED** — pull opp custom
-    fields including Quote Template (Itemised vs Subtotalled), Quote Due By, Delivery Type,
-    and Quote Contact
+    fields including Quote Template, Quote Due By, Delivery Type, and Quote Contact. Dropdown
+    values now resolve to labels inline (MCP v1.13.0+) — Stored values prints
+    `<Label> [<slug>]` for Waiting On, Delivery Type, and Quote Template.
+  - `list_dropdown_options(field='leadXtraDropdown1|2|3')` — list all options for the LeadXtra
+    Waiting On / Delivery Type / Quote Template dropdowns (MCP v1.13.0+). Useful when you need
+    the full label-to-SKU mapping
   - `get_quoting_knowledge` — **REQUIRED** at Step 1 — pull all saved lessons; filter mentally
     by category (see Knowledge taxonomy)
   - `search_products` — searches across SKU, description, extended description, manufacturer
@@ -37,7 +42,8 @@ Step 1 of every quote.
   - `search_sales_transactions(salesLedgerId=<account>)` — pull the customer's previous purchase
     history to verify any prices the user references and to spot products whose supplier may now
     be obsolete
-  - `create_quote` — quote header
+  - `create_quote` — quote header. `priceExpiryDate` parameter (YYYY-MM-DD) defaults to today + 30
+    days when omitted, matching the WCG rule
   - `add_quote_line_group` — create section headings. **REQUIRED** before adding any lines —
     see Step 4. Lines cannot be moved into a group afterwards (Pitfall 6)
   - `add_quote_line` — add lines. Always pass `groupId`
@@ -47,9 +53,10 @@ Step 1 of every quote.
     endpoint, no price recalc, accepts friendly labels
   - `get_xtra_fields(entityType='QuoteLineXtras', parentId=<lineId>)` — discover the slot-to-label
     map for the tenant
-  - `update_quote` — update header fields including the memo (use when lines change mid-build —
-    Pitfall 11)
-  - `get_quote` — verify final state
+  - `update_quote` — update header fields including the memo and `priceExpiryDate` (use when
+    lines change mid-build — Pitfall 11)
+  - `get_quote` — verify final state. CRM Link is now absolute
+    (`https://crm.prospect365.com/view/Quote/<id>`, MCP v1.13.0+)
   - `save_quoting_lesson(category=..., lesson=...)` — record learnings from corrections
   - `save_product_note(productName=..., note=...)` — record SKU-specific knowledge
 
@@ -109,27 +116,36 @@ Read the opp's **LeadXtras** carefully — these drive how the quote is built:
 | LeadXtra slot | Label | What to do |
 |---|---|---|
 | StandardDateField1 | **Quote Due By** | Customer's expected quote date. If today is past it, flag in memo as "Late — quote due was YYYY-MM-DD". |
-| StandardDropdownField2 | **Delivery Type** | If set, USE this — do not re-ask the user which service tier they want. |
-| StandardDropdownField3 | **Quote Template** | Itemised → every line prints its own price. Subtotalled → only group subtotals print. Inherited onto the quote header as "Opportunity Custom Fields Quote Template". |
+| StandardDropdownField2 | **Delivery Type** | If set, USE this — see "Delivery Type → SKU mapping" in Business Rules. Auto-derive the SKU when customer type is also known; only ask the user if either signal is missing or an edge-case SKU is needed. |
+| StandardDropdownField3 | **Quote Template** | 7 print-layout options — see "Quote Template values" in Business Rules. Inherited onto the quote print layout (not the QuoteXtras row — that stays empty). |
 | StandardSearchTextField1 | **Quote Contact** | Override the opp's Contact for the quote if Quote Contact is populated with someone different. |
 
-`list_dropdown_options` is scoped to Division dropdowns only on this tenant, so LeadXtra dropdown
-FK slugs can't be resolved to labels via the MCP. To see the human label, create the quote and
-call `get_quote` — the inherited "Opportunity Custom Fields Quote Template" appears as a plain
-string on the quote header.
+LeadXtra dropdown slugs now resolve to labels inline (MCP v1.13.0+). The Stored values block
+prints `<Label> [<slug>]` for Delivery Type, Quote Template, and Waiting On — no UI lookup
+required. If you need the full options list (e.g. to map a label to a delivery SKU), call
+`list_dropdown_options(field='leadXtraDropdown1|2|3')`.
 
 When reviewing the `get_quoting_knowledge()` output, search specifically for `customer-<acct>`
 entries for this customer and `supplier-<name>` entries for any supplier on the requested SKUs.
 
 ### 2. Clarify anything not stated, BEFORE creating the quote
 
-Use AskUserQuestion to confirm:
+Use AskUserQuestion (or the elicitation form when collecting multiple signals at once) to confirm:
 
 - **Group structure** — what section heading(s) to use. Most quotes are a single group named
   after the project / room / item type ("Workstations", "Office Chairs", "Reception Refurb").
   Complex quotes have multiple groups. **Never skip this step** — flat un-grouped quotes are
   not WCG style, and lines cannot be moved into a group after creation (Pitfall 6).
-- **Delivery / assembly approach** if not stated AND not on the opp's Delivery Type LeadXtra.
+- **Delivery / assembly approach** — derive automatically when BOTH signals are available:
+   - The opp's Delivery Type LeadXtra resolves to one of "Delivery Only", "Delivery and
+     Assembly", or "Delivery, Room Placement & Assembly", AND
+   - The customer's education-vs-commercial status is derivable from their Division (Customer
+     Type dropdown / Sector). Education = schools, academies, MATs, colleges, universities;
+     commercial = everything else.
+   When both are present, look up the SKU in the **Delivery Type → SKU mapping** table in
+   Business Rules and proceed without asking. Fall back to elicitation when (a) either signal
+   is missing, or (b) the customer needs one of the SKUs not covered by the 3 dropdown options
+   (ROOM-PLACEMENT-E, CASUAL/ASSEM-E, ASSEMBLY & INSTALL).
 - **Price of variable lines** (delivery, assembly, room placement, casual labour). These default
   to £0.00 in the catalogue. Ask what to charge.
 - **Customer PO / project code** if relevant.
@@ -137,7 +153,7 @@ Use AskUserQuestion to confirm:
 Do NOT ask about colour / finish / dimensions if they are already in the opp Situation Summary —
 those are part of the brief.
 
-Do NOT ask about Quote Template — that's set on the opp and the quote inherits it automatically.
+Do NOT ask about Quote Template — that's set on the opp.
 
 ### 3. Create the quote header
 
@@ -155,12 +171,8 @@ Notes:
   a separate `description` argument — it will be ignored.
 - contactId, company, and delivery address are pulled automatically from contact + opp linkage.
 - Always set `salesPersonId` explicitly.
-- The Quote Template setting flows from the opp's LeadXtra StandardDropdownField3 — visible on
-  the quote header as "Opportunity Custom Fields Quote Template".
-- **Price Expiry is auto-set** on every quote raised via `create_quote` from MCP v1.12.1+ —
-  defaults to today + 30 days, written to `Quote.EndDate` via a follow-up PATCH after the
-  initial POST. Override via the optional `priceExpiryDate` parameter (`YYYY-MM-DD`). See
-  Pitfall 7.
+- **Price Expiry** auto-defaults to (today + 30 days) per the WCG rule. Override via the
+  `priceExpiryDate` parameter (YYYY-MM-DD) if needed. (Resolved by MCP v1.12.x — see Pitfall 7.)
 
 ### 4. Create the group(s) FIRST
 
@@ -212,45 +224,16 @@ add_quote_line(
 When `productItemId` is supplied, the server will auto-copy the product's `WebExtendedDescription`
 into the line's `ExtendedDescription`. PRESERVE IT — see Pitfall 3.
 
-### 6. Add delivery / assembly / carriage line
+### 6. Add delivery / assembly line
 
-**Every quote needs one.** The SKU depends on (a) Versa vs Interiors, (b) for Versa, mobile
-tables vs Wall Pockets, (c) for Interiors, education vs commercial customer. Check the opp's
-LeadXtra **Delivery Type** first — if populated, use that SKU. If blank, infer from product
-mix + customer type, or ask via AskUserQuestion.
+Use the SKU from the **Delivery Type → SKU mapping** in Business Rules — derived from the opp's
+LeadXtra Delivery Type label + the customer's education-vs-commercial status. Only ask the user
+when one of those signals is missing or an edge-case SKU is needed.
 
-**Versa quotes:**
-- Mobile tables (Versa Benchmark, ConverTable, any folding / wheeled dining table) →
-  `VCARRIAGEMOB` — sell price is TIERED ON TOTAL TABLE COUNT (not customer location):
-  1-3 = £300, 4-5 = £400, 6-10 = £500, 11-15 = £700, 16+ = £950. Cost £100.
-  Catalogue sell is £0 because the real charge varies — set `price` explicitly per the matrix.
-- Wall Pockets (Versa wall-mounted folding tables) → `VWPINST-<region>` — fixed price per UK
-  region (e.g. VWPINST-LON £2080 Greater London, VWPINST-SE £2086 South East, VWPINST-SWE
-  £1425 South West). Cost £250 across UK SKUs. See KB lesson for the full regional table.
+Always set `price` explicitly even if £0.00, otherwise it pulls as null.
 
-**Interiors quotes (non-Versa):**
-Three service tiers, each with `-E` (education customers — schools, academies, MATs, colleges,
-universities) or `-C` (commercial) suffix:
-- `DEL,RP&ASSEM-E-1` / `DEL,RP&ASSEM-C` — Delivery, Room Placement AND Assembly (full white-glove)
-- `DEL&ASSEM-E-1` / `DEL&ASSEM-C` — Delivery + Assembly (ground floor only)
-- `DELIVERY-E-1` / `DELIVERY-C` — Delivery only
-
-All Interiors codes catalogue at £0 — set `price` explicitly per the agreed charge on the opp.
-
-**Carriage line POSITION rule — always last in its group:**
-- Single-group quote → carriage is the bottom line of the only group.
-- Multi-group "option" quote (Option 1 / Option 2) → carriage line appears at the end of EACH
-  group as that group's last item, so each option totals as a complete bundle the customer
-  can pick between.
-- Multi-group quote where carriage applies once across the whole quote → use a dedicated
-  final group named "Delivery & Install" with the carriage as the only line, sequenced AFTER
-  all product groups.
-
-Set carriage `sequence` to the next round number AFTER the highest product-line sequence in
-that group. See also Pitfall 14 on sequence collisions across groups.
-
-Always set `price` explicitly — never let it pull as £0 from the catalogue (and once set,
-don't try to fix it via `update_quote_line` — see Pitfall 13).
+The delivery line can sit at the bottom of the main group OR in its own "Delivery & Install"
+group — confirm with the user when discussing grouping in Step 2.
 
 ### 7. Populate QuoteLine custom fields via `update_quote_line_xtra`
 
@@ -281,7 +264,8 @@ ALWAYS call `get_quote(quoteId=<id>)` at the end to confirm:
 - Each line is in the correct group
 - Total Net / Gross / Margin look right
 - The right delivery / assembly line is present, with the agreed charge
-- The Quote Template setting on the header matches the opp's
+- **Price Expiry** is set to (created date + 30 days) — auto-defaults, but verify
+- CRM Link prints as `https://crm.prospect365.com/view/Quote/<id>` (absolute, MCP v1.13.0+)
 
 If a value differs from what was passed in, FLAG IT — don't silently override. The user may
 be editing the quote in the UI concurrently (Pitfall 1).
@@ -368,36 +352,18 @@ assign it to a group — the user has to drag it in manually.
 - ALWAYS pass `groupId` to every `add_quote_line` call (Step 5).
 - Confirm the group structure with the user up-front via AskUserQuestion (Step 2).
 
-### Pitfall 7 — Price Expiry: now auto-set via Quote.EndDate (RESOLVED v1.12.1+)
+### Pitfall 7 — RESOLVED — Price Expiry now settable via the MCP (v1.12.x+)
 
-RESOLVED in MCP v1.12.1 (2026-05-19). Price Expiry is stored on `Quote.EndDate` (database
-column `donotuse_enddate` — the `donotuse_` prefix is misleading, the column is actively
-repurposed for Price Expiry). It is NOT in QuoteXtras (earlier guidance in v1-v2 of this skill
-was wrong — verified by setting the field in the UI and observing QuoteXtras stayed empty).
+The MCP's `create_quote` and `update_quote` tools accept a `priceExpiryDate` parameter
+(YYYY-MM-DD format) that writes to `Quote.EndDate` — the column behind "Price Expiry" on the
+Quote header. When omitted on `create_quote`, defaults to today + 30 days at 12:00 UTC, matching
+the WCG rule that prices are held for 30 days.
 
-`create_quote` now automatically sets `Quote.EndDate` to today + 30 days via a follow-up
-PATCH after the initial POST. The optional `priceExpiryDate` parameter (`YYYY-MM-DD`)
-overrides this default. The success message confirms the date that was written:
+**Still true — `orderDueDate` is a trap.** `update_quote(orderDueDate=...)` maps to the
+deprecated `donotuse_orderduedate` column, NOT the Price Expiry field. The write succeeds but
+the value never appears in the UI. Always use `priceExpiryDate` for the UI's "Price Expiry".
 
-```
-**Price Expiry:** 2026-06-18
-```
-
-If the response shows `**Price Expiry:** ❌ failed to write — please set manually in the
-Prospect UI`, the follow-up PATCH errored and the user should set the field manually.
-
-Why the two-step pattern: Prospect's OData metadata flags `Quote.EndDate` as
-`UpdateVisibility="never"` (technically — it omits the attribute entirely, which defaults to
-"never" on this tenant), so the POST handler silently DROPS any EndDate in the initial body.
-PATCH accepts it. Same metadata-lies pattern this codebase has hit at v1.3.2 (Notepad FKs),
-v1.4.0 (Enquiry FKs), v1.5.0 (CampaignActivityContact), v1.6.0 (Division.CompanyId). Verified
-via dev-tools inspection of the Prospect UI's own save sequence on quote 15493 — the UI uses
-the same POST-then-PATCH pattern.
-
-**Do NOT use the MCP's `update_quote(orderDueDate=...)` parameter** — `orderDueDate` maps to
-`donotuse_orderduedate`, a DIFFERENT legacy column that the UI no longer surfaces. The write
-succeeds but the value never appears anywhere. The MCP descriptions on `orderDueDate` are
-marked DEPRECATED from v1.12.0+ for exactly this reason. Use `priceExpiryDate` instead.
+(Previously documented as "Price Expiry cannot be set via the MCP" — out of date as of v1.12.x.)
 
 ### Pitfall 8 — `add_quote_line` quantity-0.002 bug
 
@@ -456,67 +422,26 @@ When adding a replacement line via Pitfall 9's workflow, set `sequence` to match
 being replaced so the new line lands in the same display slot. Otherwise the quote re-orders
 mid-build and the user has to drag lines around in the UI.
 
-### Pitfall 13 — `update_quote_line` zeroes the price on £0-catalogue product-linked lines
+### Pitfall 13 — `update_quote_line` resets `price` to £0 on product-linked lines whose catalogue price is £0
 
-Service-code SKUs (Versa `VCARRIAGEMOB`, all WCG delivery codes `DELIVERY-E-1`,
-`DEL&ASSEM-E-1`, `DEL,RP&ASSEM-E-1`, `ROOM-PLACEMENT-E`, `CASUAL/ASSEM-E`,
-`ASSEMBLY & INSTALL`, etc.) are deliberately catalogued at £0 because the actual charge
-varies per quote. When you call `update_quote_line(lineId=..., price=700, ...)` on one of
-these lines, the server triggers a post-write recalc that re-pulls the £0 catalogue price
-and overwrites your £700 override. The MCP response says "Fields changed: ..., DecimalPrice,
-..." but the net effect is the line ends up at £0. Retrying with the same args does NOT
-recover it.
+Observed 2026-05-19 on quote 15493 (Grenfell Hall) with VCARRIAGEMOB. The Versa carriage SKUs
+and the standard WCG delivery service codes (DELIVERY-E-1, DEL&ASSEM-E-1, DEL,RP&ASSEM-E-1,
+ROOM-PLACEMENT-E, CASUAL/ASSEM-E, ASSEMBLY & INSTALL, etc.) are deliberately catalogued at £0
+because the real charge varies per quote — the sell price is captured per-quote on `add_quote_line`.
 
-`add_quote_line` honours the explicit `price` arg correctly — only `update_quote_line`
-triggers the recalc.
+When you then call `update_quote_line(lineId=..., price=700, ...)` on one of these lines, the
+MCP wrapper / server triggers a post-write recalc that re-pulls the product's catalogue price
+(£0) and overwrites your £700. Re-running `update_quote_line` with the same args does NOT fix it.
 
-**Workaround when you need to "edit" one of these lines** (e.g. to fix a wrong sequence or
-qty on an existing carriage line):
+`add_quote_line` does NOT have this bug — it honours the explicit `price` arg correctly.
 
-1. State the workaround clearly in chat — "Re-adding carriage line because update_quote_line
-   would zero the price; please delete the old £0 line LineId X in the UI when done."
-2. Add a fresh line via `add_quote_line` with the right `price`, `groupId`, and `sequence`.
-   `add_quote_line` preserves the explicit price.
-3. Tell the user the LineId of the old £0 line so they can delete it manually in the Prospect
-   UI (since `delete_quote_line` is disabled on this tenant per Pitfall 9).
-4. After confirmation, re-run `get_quote` to verify only the new line remains for that
-   product.
-
-Observed 2026-05-19 on quote 15493 (Grenfell Hall) — `update_quote_line` repeatedly returned
-"DecimalPrice changed" but the £700 carriage lines kept settling at £0 until we re-created
-them via `add_quote_line`.
-
-### Pitfall 14 — Sequence collisions across groups scramble display order
-
-The Prospect UI sorts quote lines by `Sequence` GLOBALLY, not per-group. If you give both
-"Option 1 line 1" and "Option 2 line 1" the same `sequence=10`, the UI's tiebreaking shuffles
-them unpredictably. Observed 2026-05-19 on a multi-group "options" quote: Option 2's carriage
-line at `sequence=40` displayed BEFORE Option 2's ConverTable at `sequence=30` despite both
-being in group 2, because Option 1's carriage at `sequence=30` won the global tiebreak and
-shoved everything around.
-
-**Mitigation:** use globally unique sequence values across groups. Big gaps between groups:
-
-```
-Group 1 (Option 1):
-  product line 1:   sequence=10
-  product line 2:   sequence=20
-  carriage:         sequence=30
-
-Group 2 (Option 2):
-  product line 1:   sequence=100   ← big jump so no collision with group 1
-  product line 2:   sequence=110
-  product line 3:   sequence=120
-  carriage:         sequence=130
-
-Group 3 (Option 3):
-  product line 1:   sequence=200
-  ...
-```
-
-Especially important for multi-group "option" / "phase" quotes. If you fix this AFTER lines
-are created via `update_quote_line(..., sequence=...)`, be aware Pitfall 13 may zero out
-prices on £0-catalogue lines — preferable to get the sequence right at `add_quote_line` time.
+**Workaround:**
+1. NEVER call `update_quote_line` on a product-linked line whose catalogue price is £0 — not
+   for re-sequencing, not for price corrections, not even for description tweaks.
+2. To fix a botched line of this type: add a new line via `add_quote_line` (with the right
+   price + group + sequence), and ask the user to manually delete the £0 line in the Prospect
+   UI (since `delete_quote_line` is disabled — see Pitfall 9).
+3. To re-sequence a carriage line, do it at create-time on `add_quote_line`.
 
 ## Business Rules
 
@@ -550,22 +475,69 @@ At Step 1:
 | `DELIVERY-E-1` | Delivery only — to your school, no charge | Stock item |
 | `DELIVERY-C` | Delivery / Carriage Charge | Use when delivery is chargeable |
 | `DEL&ASSEM-E-1` | Delivery + assembly, ground floor only | Stock item |
+| `DEL&ASSEM-C` | Delivery + assembly, commercial | |
 | `ROOM-PLACEMENT-E` | Delivery + room placement (no assembly) | |
 | `DEL,RP&ASSEM-E-1` | Delivery, room placement, AND assembly | Full white-glove |
+| `DEL,RP&ASSEM-C` | Delivery, room placement, AND assembly, commercial | |
 | `CASUAL/ASSEM-E` | Casual labour — assembly | When assembly is contracted out |
 | `ASSEMBLY & INSTALL` | Assembly & install (combined) | |
 
-If unsure, check the opp's LeadXtra **Delivery Type** first. If blank, ask the user. All
-default to £0.00 in the catalogue.
+The opp's LeadXtra **Delivery Type** dropdown maps to a subset of these — see "Delivery Type
+→ SKU mapping" below. For SKUs outside the mapping (ROOM-PLACEMENT-E, CASUAL/ASSEM-E,
+ASSEMBLY & INSTALL) fall back to asking the user.
+
+### Delivery Type → SKU mapping (LeadXtra StandardDropdownField2)
+
+When the opp's Delivery Type label is set AND the customer's education-vs-commercial status is
+known, auto-derive the delivery SKU from this table:
+
+| Delivery Type label | Education (-E) | Commercial (-C) |
+|---|---|---|
+| Delivery Only | DELIVERY-E-1 | DELIVERY-C |
+| Delivery and Assembly | DEL&ASSEM-E-1 | DEL&ASSEM-C |
+| Delivery, Room Placement & Assembly | DEL,RP&ASSEM-E-1 | DEL,RP&ASSEM-C |
+
+Customer type comes from the Division's Customer Type / Sector dropdown — education = schools,
+academies, MATs, colleges, universities; commercial = everything else.
+
+These 3 dropdown options don't cover every WCG service code. For edge cases
+(ROOM-PLACEMENT-E, CASUAL/ASSEM-E, ASSEMBLY & INSTALL) fall back to asking the user via
+elicitation.
+
+### Quote Template values (LeadXtra StandardDropdownField3)
+
+7 print-layout options on this tenant:
+- Itemised
+- Itemised (no grand totals)
+- Itemised and Subtotalled
+- Itemised and Subtotalled (no grand totals)
+- Non Itemised
+- Non Itemised and Subtotalled
+- Non Itemised and Subtotalled (no grand totals)
+
+Read via `get_xtra_fields(LeadXtras)` — the label resolves inline (MCP v1.13.0+). The setting
+drives the printed quote PDF's layout; it does not write back to QuoteXtras on the new quote.
+
+When the template is "Subtotalled" (any variant), grouping discipline matters even more — the
+customer only sees group subtotals, so group names and pricing balance per group is what they
+see. Discuss group structure with the user explicitly in Step 2.
+
+### Waiting On values (LeadXtra StandardDropdownField1)
+
+2 options:
+- Waiting on Customer
+- Waiting on Supplier
+
+Use as context in the quote memo if populated.
 
 ### Opportunity LeadXtra field map (WCG tenant)
 
 | LeadXtra slot | Label | Use |
 |---|---|---|
 | StandardDateField1 | Quote Due By | Flag in memo if today > this date |
-| StandardDropdownField1 | Waiting On | Context for memo |
-| StandardDropdownField2 | Delivery Type | Pre-select delivery tier instead of asking |
-| StandardDropdownField3 | **Quote Template** | Itemised vs Subtotalled — drives quote print layout |
+| StandardDropdownField1 | Waiting On | Context for memo (2 options — see above) |
+| StandardDropdownField2 | Delivery Type | Pre-select delivery SKU via mapping table |
+| StandardDropdownField3 | **Quote Template** | 7 print-layout options — see "Quote Template values" |
 | StandardSearchTextField1 | Quote Contact | Override opp Contact for the quote if populated |
 | StandardFlagField1 | Exclude from Forecast | Don't reference unless asked |
 
@@ -605,43 +577,37 @@ If the line-up changes mid-build, refresh the memo via `update_quote(memo=...)` 
 
 End every quote-creation session with:
 
-1. `get_quote(quoteId=<id>)` — confirm prices, quantities, groups, totals, delivery / carriage
-   line at the bottom of its group, Quote Template setting, and Price Expiry populated.
+1. `get_quote(quoteId=<id>)` — confirm prices, quantities, groups, totals, delivery line,
+   and **Price Expiry** (auto-defaults to created + 30 days). CRM Link should print as
+   `https://crm.prospect365.com/view/Quote/<id>` (absolute URL, MCP v1.13.0+).
 2. `get_xtra_fields(entityType='QuoteLineXtras', parentId=<lineId>)` for any line you set
    custom fields on — confirm stored values are correct.
-3. Confirm Price Expiry appears in the `create_quote` response — `**Price Expiry:** YYYY-MM-DD`.
-   If it shows `❌ failed to write`, the follow-up PATCH errored; ask the user to set the date
-   manually in the Prospect UI. See Pitfall 7.
-4. Save any new learnings via `save_quoting_lesson` (correct category) or `save_product_note`
+3. Save any new learnings via `save_quoting_lesson` (correct category) or `save_product_note`
    — Step 9.
 
 ## Changelog
 
-- **2026-05-19 (v4)** — Price Expiry resolved (it's `Quote.EndDate`, NOT QuoteXtras — earlier
-  Pitfall 7 was wrong). MCP v1.12.1+ auto-sets it on `create_quote` to today + 30 days via a
-  follow-up PATCH after the initial POST, with the optional `priceExpiryDate` parameter for
-  overrides. Step 9 (manual UI reminder) removed from the workflow — no longer needed.
-  Pitfall 7 fully rewritten with the new resolution and the metadata-lies explanation.
-  Step 3 note updated to reflect auto-set behaviour. Verification step 3 updated to check
-  the response's `**Price Expiry:**` line instead of reminding the user.
-
-  Step 6 (delivery / carriage line) expanded with the full taxonomy:
-  - Versa mobile tables → `VCARRIAGEMOB` tiered on table count (1-3 £300 ... 16+ £950).
-  - Versa Wall Pockets → `VWPINST-<region>` fixed per UK region.
-  - Interiors → `DEL,RP&ASSEM` / `DEL&ASSEM` / `DELIVERY` × `-E` (education) or `-C`
-    (commercial) suffix based on customer type.
-  - Carriage line POSITION rule: must always be the last line in its group. For multi-group
-    "option" quotes, carriage appears at the end of EACH group.
-
-  New Pitfall 13: `update_quote_line` zeroes the price on £0-catalogue product-linked lines
-  (all service codes / Versa carriage SKUs). Workaround: re-create via `add_quote_line` +
-  delete old in UI. Observed during the Grenfell Hall session.
-
-  New Pitfall 14: sequence collisions across groups scramble display order — the Prospect UI
-  sorts by Sequence GLOBALLY, not per-group. Mitigation: use big gaps between groups
-  (10/20/30 for group 1, 100/110/120/130 for group 2, etc.).
-
-  Codified during the Grenfell Hall Versa options quote session (opp 15457 / quote 15493).
+- **2026-05-21 (v4)** — Updated for MCP v1.12.x and v1.13.0 capabilities (Cowork retrospective
+  from opp 15502 / quote 15512 — The Stonehenge School):
+  * `get_xtra_fields(LeadXtras)` now resolves dropdown slugs to human labels inline (Waiting On,
+    Delivery Type, Quote Template). Removed the outdated workaround that required creating the
+    quote just to see Quote Template's value (it didn't actually inherit onto QuoteXtras).
+  * `list_dropdown_options` now accepts `leadXtraDropdown1|2|3`. Added to tool inventory.
+  * Added **Delivery Type → SKU mapping** table in Business Rules. Skill now auto-derives the
+    delivery SKU when Delivery Type label + customer type are both available — only falls back
+    to elicitation when either is missing or an edge-case SKU is needed (ROOM-PLACEMENT-E,
+    CASUAL/ASSEM-E, ASSEMBLY & INSTALL).
+  * Quote Template documented as having 7 print-layout options (was previously stated as 2 —
+    Itemised vs Subtotalled — which was wrong/incomplete).
+  * Waiting On documented as 2 options (Customer / Supplier).
+  * Marked Pitfall 7 as RESOLVED — Price Expiry IS settable via `priceExpiryDate` param on
+    `create_quote` / `update_quote` since v1.12.x; defaults to today + 30 days on create.
+    Removed the "remind user to set Price Expiry in UI" Step 9 and Verification step 3 (both
+    now obsolete). The `orderDueDate` trap warning is retained.
+  * CRM Links now absolute (`https://crm.prospect365.com/view/...`) by default — no manual
+    prefixing needed downstream. Updated Verification to confirm absolute URLs print correctly.
+  * Service Codes table extended with `DEL&ASSEM-C` and `DEL,RP&ASSEM-C` (commercial variants).
+  * Renumbered Step 10 (Capture learnings) → Step 9 after removing the Price Expiry reminder.
 
 - **2026-05-18 (v3)** — Reorganised knowledge layering. Stripped all customer/supplier/SKU
   specifics from the skill (these now live in `save_quoting_lesson` with `customer-<acct>` /
