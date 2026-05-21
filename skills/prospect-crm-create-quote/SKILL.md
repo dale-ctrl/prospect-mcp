@@ -174,27 +174,63 @@ Notes:
 - **Price Expiry** auto-defaults to (today + 30 days) per the WCG rule. Override via the
   `priceExpiryDate` parameter (YYYY-MM-DD) if needed. (Resolved by MCP v1.12.x — see Pitfall 7.)
 
-### 4. Create the group(s) FIRST
+### 4. Create the group(s) FIRST — with display toggles set per the opp's Quote Template
 
 Before adding any lines, create the section headings via `add_quote_line_group`. Capture the
 returned `GroupId` — you'll need it on every line.
 
+**Every group on the quote MUST have its display toggles set to match the opp's Quote Template**
+(LeadXtra StandardDropdownField3). Apply the same toggle settings to every group on a multi-group
+quote — the Quote Template is a single value per opp.
+
+Mapping rules:
+
+- Template contains "Itemised" → `showPriceColumn = true`
+- Template contains "Non Itemised" → `showPriceColumn = false`
+- Template contains "Subtotalled" → `showSubtotal = true`
+- Template does NOT contain "Subtotalled" → `showSubtotal = false`
+
+`(no grand totals)` is a quote-HEADER concern — ignore it at the group level.
+
+Full mapping for the 7 WCG Quote Template values:
+
+| Quote Template | showPriceColumn | showSubtotal |
+|---|---|---|
+| Itemised | `true` | `false` |
+| Itemised (no grand totals) | `true` | `false` |
+| Itemised and Subtotalled | `true` | `true` |
+| Itemised and Subtotalled (no grand totals) | `true` | `true` |
+| Non Itemised | `false` | `false` |
+| Non Itemised and Subtotalled | `false` | `true` |
+| Non Itemised and Subtotalled (no grand totals) | `false` | `true` |
+
+**Always pass these toggles explicitly — do NOT rely on wrapper defaults** (see Pitfall 14).
+
+Example for "Itemised" template:
+
 ```
-add_quote_line_group(quoteId=<id>, title="Workstations", sequence=10)  # returns GroupId
+add_quote_line_group(
+  quoteId=<id>,
+  title="Workstations",
+  sequence=10,
+  showPriceColumn=true,    # template is "Itemised"
+  showSubtotal=false       # template does NOT contain "Subtotalled"
+)  # returns GroupId
 ```
 
-For multi-group quotes, create all groups up-front in display order:
+Multi-group quote with the same opp-level Quote Template applied to every group:
 
 ```
-add_quote_line_group(quoteId=..., title="Workstations",       sequence=10)  # GroupId G1
-add_quote_line_group(quoteId=..., title="Seating",            sequence=20)  # GroupId G2
-add_quote_line_group(quoteId=..., title="Storage",            sequence=30)  # GroupId G3
-add_quote_line_group(quoteId=..., title="Delivery & Install", sequence=40)  # GroupId G4
+add_quote_line_group(quoteId=..., title="Workstations",       sequence=10, showPriceColumn=true, showSubtotal=false)
+add_quote_line_group(quoteId=..., title="Seating",            sequence=20, showPriceColumn=true, showSubtotal=false)
+add_quote_line_group(quoteId=..., title="Storage",            sequence=30, showPriceColumn=true, showSubtotal=false)
+add_quote_line_group(quoteId=..., title="Delivery & Install", sequence=40, showPriceColumn=true, showSubtotal=false)
 ```
 
 **Why this matters:** `update_quote_line` does not expose a `groupId` parameter, and
 `delete_quote_line` is **disabled** on the WCG tenant. So if you add lines without a `groupId`,
 there is NO way to move them into a group via the MCP — the user has to drag them in via the UI.
+The same UI-only escape applies to toggle fixes (see Pitfall 14).
 
 ### 5. Add each product line at creation time
 
@@ -443,6 +479,28 @@ MCP wrapper / server triggers a post-write recalc that re-pulls the product's ca
    UI (since `delete_quote_line` is disabled — see Pitfall 9).
 3. To re-sequence a carriage line, do it at create-time on `add_quote_line`.
 
+### Pitfall 14 — No `update_quote_line_group` writer; `add_quote_line_group` defaults not honoured
+
+Two related gaps observed on quote 15518 (2026-05-21, Hampton School):
+
+1. **Defaults don't apply at create time.** `add_quote_line_group` documents `showPriceColumn`
+   and `showSubtotal` as defaulting to `true`, but groups created without explicit values came
+   through with both toggles OFF in the UI. **Always pass them explicitly** per the Step 4
+   mapping.
+2. **No `update_quote_line_group` MCP writer.** If a group's toggles are wrong after creation
+   there is no way to fix them programmatically — the user has to do it in the UI: click the
+   group title row → toggle the relevant Output Format Settings → Save.
+
+**Mitigation:**
+- Set toggles correctly at `add_quote_line_group` time using the Step 4 mapping.
+- If you spot a toggle mismatch mid-session via `get_quote`, tell the user the GroupId and
+  which toggles to flip, ask them to fix it in the UI, then re-verify with `get_quote`.
+
+**ACTIONABLE for MCP repo:** add `update_quote_line_group(groupId, title?, sequence?,
+showPriceColumn?, showSubtotal?, showDiscount?, showSeparateTotals?, showDiscountInSubtotal?,
+newPage?, newTable?)` — the UI dialog exposes all those toggles so the underlying API endpoint
+accepts them.
+
 ## Business Rules
 
 ### Default pricing rule — SKU prefix
@@ -537,7 +595,7 @@ Use as context in the quote memo if populated.
 | StandardDateField1 | Quote Due By | Flag in memo if today > this date |
 | StandardDropdownField1 | Waiting On | Context for memo (2 options — see above) |
 | StandardDropdownField2 | Delivery Type | Pre-select delivery SKU via mapping table |
-| StandardDropdownField3 | **Quote Template** | 7 print-layout options — see "Quote Template values" |
+| StandardDropdownField3 | **Quote Template** | Drives per-group display toggles (showPriceColumn / showSubtotal) — see Step 4 for the full mapping. |
 | StandardSearchTextField1 | Quote Contact | Override opp Contact for the quote if populated |
 | StandardFlagField1 | Exclude from Forecast | Don't reference unless asked |
 
@@ -587,6 +645,13 @@ End every quote-creation session with:
 
 ## Changelog
 
+- **2026-05-21 (v4)** — Codified Quote Template → group display-toggle mapping at Step 4
+  ("Itemised" → showPriceColumn=true; "Non Itemised" → showPriceColumn=false; "Subtotalled" →
+  showSubtotal=true; combinations read literally). Applies to every group on a quote. Added
+  Pitfall 14 covering (a) no `update_quote_line_group` MCP writer and (b)
+  `add_quote_line_group` toggle defaults coming through OFF despite documented `true`. Always
+  set toggles explicitly. Updated the LeadXtra field map row for Quote Template to reference
+  Step 4. Discovered during opp 15510 / quote 15518 (Hampton School).
 - **2026-05-21 (v4)** — Updated for MCP v1.12.x and v1.13.0 capabilities (Cowork retrospective
   from opp 15502 / quote 15512 — The Stonehenge School):
   * `get_xtra_fields(LeadXtras)` now resolves dropdown slugs to human labels inline (Waiting On,
