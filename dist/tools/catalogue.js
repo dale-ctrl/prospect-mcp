@@ -4,6 +4,7 @@
  */
 import { z } from "zod";
 import { getClient } from "../client.js";
+import { toCrmLink } from "../lib/urls.js";
 // ─── Schemas ──────────────────────────────────────────────────
 export const getProductCategoriesSchema = z.object({
     includeObsolete: z.boolean().optional().default(false).describe("Include obsolete categories"),
@@ -174,7 +175,7 @@ export async function createInventory(args) {
         `**Type:** ${args.typeId}`,
         `**Status:** ${args.statusCode}`,
         `**Serial:** ${created.SerialNumber || "N/A"}`,
-        `**CRM Link:** ${created.RecordLink || "N/A"}`,
+        `**CRM Link:** ${toCrmLink(created.RecordLink)}`,
     ].join("\n");
 }
 export async function updateInventory(args) {

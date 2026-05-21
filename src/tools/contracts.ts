@@ -5,6 +5,7 @@
 
 import { z } from "zod";
 import { getClient } from "../client.js";
+import { toCrmLink } from "../lib/urls.js";
 
 // ─── Schemas ──────────────────────────────────────────────────
 
@@ -67,7 +68,7 @@ export async function createContract(args: z.infer<typeof createContractSchema>)
     `**Description:** ${created.ContractDesc || args.contractDesc || "N/A"}`,
     `**DivisionId:** ${args.divisionId}`,
     `**Type:** ${args.typeCode}`,
-    `**CRM Link:** ${created.RecordLink || "N/A"}`,
+    `**CRM Link:** ${toCrmLink(created.RecordLink as string | null | undefined)}`,
   ].join("\n");
 }
 
@@ -160,7 +161,7 @@ export async function searchContracts(args: z.infer<typeof searchContractsSchema
       `**Contract #${c.ContractId}** — ${c.ContractDesc || "(untitled)"}`,
       `  Company: ${company} | Type: ${type}`,
       `  Ref: ${c.AlternateReference || "N/A"} | ${scheduleInfo}`,
-      `  Link: ${c.RecordLink || "N/A"}`,
+      `  Link: ${toCrmLink(c.RecordLink as string | null | undefined)}`,
     ].join("\n");
   });
 
@@ -211,7 +212,7 @@ export async function getContract(args: z.infer<typeof getContractSchema>): Prom
     output += "\n(no schedules)";
   }
 
-  output += `\n\n**CRM Link:** ${c.RecordLink || "N/A"}`;
+  output += `\n\n**CRM Link:** ${toCrmLink(c.RecordLink as string | null | undefined)}`;
   return output;
 }
 

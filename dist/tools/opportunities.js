@@ -4,6 +4,7 @@
  */
 import { z } from "zod";
 import { getClient } from "../client.js";
+import { toCrmLink } from "../lib/urls.js";
 // ─── Schemas ───────────────────────────────────────────────────
 export const searchOpportunitiesSchema = z.object({
     description: z.string().optional().describe("Search term to match against Description"),
@@ -126,7 +127,7 @@ export async function searchOpportunities(args) {
             `  Status: ${statusCol} | Pipeline: ${pipeline} | Salesperson: ${salesperson}`,
             `  Value: £${l.Value?.toFixed(2) ?? "0.00"} | Weighted: £${l.WeightedValue?.toFixed(2) ?? "0.00"} | Confidence: ${l.Guttometer ?? 0}%`,
             `  Est. Close: ${l.EstimatedClose?.substring(0, 10) || "N/A"} | Created: ${l.Created?.substring(0, 10) || "N/A"}`,
-            `  Link: ${l.RecordLink || "N/A"}`,
+            `  Link: ${toCrmLink(l.RecordLink)}`,
         ].join("\n");
     });
     return `Found ${result.value.length} opportunity(ies):\n\n${lines.join("\n\n")}`;
@@ -185,7 +186,7 @@ export async function getOpportunity(args) {
         `## Situation Summary`,
         lead.SituationSummary || "(none)",
         "",
-        `**CRM Link:** ${lead.RecordLink || "N/A"}`,
+        `**CRM Link:** ${toCrmLink(lead.RecordLink)}`,
     ].join("\n");
 }
 export async function createOpportunity(args) {
@@ -246,7 +247,7 @@ export async function createOpportunity(args) {
         `**Value:** £${created.Value?.toFixed(2) ?? "0.00"}`,
         `**Estimated Close:** ${created.EstimatedClose?.substring(0, 10) || "N/A"}`,
         `**Created:** ${created.Created?.substring(0, 10) || "now"}`,
-        `**CRM Link:** ${created.RecordLink || "N/A"}`,
+        `**CRM Link:** ${toCrmLink(created.RecordLink)}`,
     ].join("\n");
 }
 export async function updateOpportunity(args) {

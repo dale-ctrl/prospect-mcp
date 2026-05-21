@@ -3,6 +3,7 @@
  */
 import { z } from "zod";
 import { getClient } from "../client.js";
+import { toCrmLink } from "../lib/urls.js";
 const OPERATING_COMPANY_CODE = "A"; // Westcountry Group
 const QUOTE_DESCRIPTION_MAX = 250; // Quote.Description column cap
 // When a quote is linked to an opportunity, WCG policy is that the quote
@@ -171,7 +172,7 @@ export async function searchQuotes(args) {
             `  Status: ${status} | Salesperson: ${salesperson}`,
             `  Net: £${q.DecimalHomeNetValue?.toFixed(2) ?? "0.00"} | Gross: £${q.DecimalHomeGrossValue?.toFixed(2) ?? "0.00"} | Margin: ${q.MarginPercentage?.toFixed(1) ?? "N/A"}%`,
             `  Created: ${q.Created?.substring(0, 10) || "N/A"} | Price Expiry: ${q.EndDate?.substring(0, 10) || "(not set)"}`,
-            `  Link: ${q.RecordLink || "N/A"}`,
+            `  Link: ${toCrmLink(q.RecordLink)}`,
         ].join("\n");
     });
     return `Found ${result.value.length} quote(s):\n\n${lines.join("\n\n")}`;
@@ -256,7 +257,7 @@ export async function getQuote(args) {
         }
         output += "\n" + (xtraLines.length > 0 ? xtraLines.join("\n") : "(no custom fields set)");
     }
-    output += `\n\n**CRM Link:** ${quote.RecordLink || "N/A"}`;
+    output += `\n\n**CRM Link:** ${toCrmLink(quote.RecordLink)}`;
     return output;
 }
 export async function createQuote(args) {
@@ -343,7 +344,7 @@ export async function createQuote(args) {
         `**Status:** ${created.StatusId}`,
         `**Created:** ${created.Created?.substring(0, 10) || "now"}`,
         `**Price Expiry:** ${priceExpiryWritten ? priceExpiry.substring(0, 10) : "❌ failed to write — please set manually in the Prospect UI"}`,
-        `**CRM Link:** ${created.RecordLink || "N/A"}`,
+        `**CRM Link:** ${toCrmLink(created.RecordLink)}`,
         "",
         `Next: Use **add_quote_line** with QuoteId ${created.QuoteId} to add line items.`,
     ].join("\n");
@@ -513,7 +514,7 @@ export async function duplicateQuote(args) {
         `**Lines copied:** ${linesCopied}`,
         `**Contact:** ${newQuote.ContactId}`,
         original.LeadId != null ? `**Linked opportunity:** Lead #${original.LeadId} (carried from original)` : "",
-        `**CRM Link:** ${newQuote.RecordLink || "N/A"}`,
+        `**CRM Link:** ${toCrmLink(newQuote.RecordLink)}`,
     ].filter(Boolean).join("\n");
 }
 export async function addQuoteLineGroup(args) {

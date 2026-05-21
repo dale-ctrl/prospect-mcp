@@ -5,6 +5,7 @@
 
 import { z } from "zod";
 import { getClient } from "../client.js";
+import { toCrmLink } from "../lib/urls.js";
 
 // ─── Schemas ──────────────────────────────────────────────────
 
@@ -104,6 +105,6 @@ export async function getInventory(args: z.infer<typeof getInventorySchema>): Pr
     `**Manufacturer Ref:** ${inv.ManufacturerReference || "N/A"}`,
     "",
     inv.ExtendedDescription ? `## Notes\n${inv.ExtendedDescription}` : "",
-    `**CRM Link:** ${inv.RecordLink || "N/A"}`,
+    `**CRM Link:** ${toCrmLink(inv.RecordLink as string | null | undefined)}`,
   ].filter(Boolean).join("\n");
 }

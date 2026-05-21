@@ -4,8 +4,8 @@
  */
 
 import { z } from "zod";
-import { getClient } from "../client.js";
-import { loadXtraSlots, indexSlotsByIdentifier, type XtraSlot } from "../lib/xtra-labels.js";
+import { getClient, type ProspectClient } from "../client.js";
+import { loadXtraSlots, indexSlotsByIdentifier, entityIdForXtraSet, type XtraSlot } from "../lib/xtra-labels.js";
 
 // ─── Schemas ──────────────────────────────────────────────────
 
@@ -39,6 +39,7 @@ export const getContactProfilingSchema = z.object({
 function formatXtraFieldValues(
   data: Record<string, unknown>,
   slotsByIdentifier: Record<string, XtraSlot> = {},
+  dropdownLabels: Map<string, string> = new Map(),
 ): string {
   const lines: string[] = [];
   const buckets: Array<[string, RegExp]> = [
@@ -64,15 +65,61 @@ function formatXtraFieldValues(
     for (const { idx, key, value } of matches) {
       const slot = slotsByIdentifier[key];
       const friendly = slot?.fieldLabel ? ` — _${slot.fieldLabel}_` : "";
-      const rendered =
-        label === "Date" && typeof value === "string" && value.includes("T")
-          ? value.substring(0, 10)
-          : String(value);
+      let rendered: string;
+      if (label === "Date" && typeof value === "string" && value.includes("T")) {
+        rendered = value.substring(0, 10);
+      } else if (label === "Dropdown") {
+        // Dropdown values are FK slugs of the form
+        // `Entity.<EntityName>.StandardDropdownField<N>.<hash>`. Resolve to
+        // the human label so the user sees "Delivery only [Entity.LeadXtra…]"
+        // instead of a raw hash. Falls back to "(unresolved)" if the
+        // DropdownItems lookup didn't include this slug — never throws.
+        const slug = String(value);
+        const human = dropdownLabels.get(slug);
+        if (human) {
+          rendered = `${human} [${slug}]`;
+        } else if (slug.startsWith("Entity.") && slug.includes(".StandardDropdownField")) {
+          rendered = `${slug} (unresolved)`;
+        } else {
+          rendered = slug;
+        }
+      } else {
+        rendered = String(value);
+      }
       lines.push(`**${label} ${idx}:**${friendly} ${rendered}`);
     }
   }
 
   return lines.length > 0 ? lines.join("\n") : "(no values stored)";
+}
+
+/**
+ * Load `{slug → human label}` for every Standard dropdown slot on this Xtra
+ * entity. Best-effort — returns an empty map on any failure so the caller
+ * can still format raw slugs. One round-trip per get_xtra_fields call.
+ */
+async function loadXtraDropdownLabels(
+  client: ProspectClient,
+  entityType: string,
+): Promise<Map<string, string>> {
+  try {
+    const entityId = entityIdForXtraSet(entityType);
+    const sp = new URLSearchParams();
+    sp.set("$filter", `startswith(Id, 'Entity.${entityId}.StandardDropdownField')`);
+    sp.set("$select", "Id,Description");
+    sp.set("$top", "500");
+    const result = await client.get<{ Id: string | null; Description: string | null }>(
+      "DropdownItems",
+      sp.toString(),
+    );
+    const map = new Map<string, string>();
+    for (const row of result.value) {
+      if (row.Id && row.Description) map.set(row.Id, row.Description);
+    }
+    return map;
+  } catch {
+    return new Map();
+  }
 }
 
 /** Render the slot map regardless of whether values are populated. */
@@ -157,9 +204,10 @@ export async function getXtraFields(args: z.infer<typeof getXtraFieldsSchema>): 
     return `Unknown Xtra entity type: ${args.entityType}`;
   }
 
-  // Fetch slots in parallel with the data — slots are cached per-process
-  // and an EntityFields lookup failure shouldn't blank the underlying values.
-  const [result, slots] = await Promise.all([
+  // Fetch slots, data, and dropdown labels in parallel. Slots are cached per
+  // process; the dropdown-label lookup runs every call (DropdownItems is
+  // small per entity) but failures are absorbed by the formatter.
+  const [result, slots, dropdownLabels] = await Promise.all([
     (async () => {
       // Don't $select — the standard-field shape varies per Xtra entity (e.g.
       // DivisionXtra has only StandardDecimalField1..5 and uses StandardFlagField,
@@ -170,6 +218,7 @@ export async function getXtraFields(args: z.infer<typeof getXtraFieldsSchema>): 
       return client.get<Record<string, unknown>>(args.entityType, sp.toString());
     })(),
     loadXtraSlots(client, args.entityType).catch(() => [] as XtraSlot[]),
+    loadXtraDropdownLabels(client, args.entityType),
   ]);
 
   const data = result.value[0] ?? {};
@@ -188,7 +237,7 @@ export async function getXtraFields(args: z.infer<typeof getXtraFieldsSchema>): 
     "",
     `## Stored values`,
     rowExists
-      ? formatXtraFieldValues(data, slotIndex)
+      ? formatXtraFieldValues(data, slotIndex, dropdownLabels)
       : `(no Xtra row exists yet for ${parentKey}=${args.parentId} — first write will create one)`,
   ].join("\n");
 }

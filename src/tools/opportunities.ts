@@ -5,6 +5,7 @@
 
 import { z } from "zod";
 import { getClient } from "../client.js";
+import { toCrmLink } from "../lib/urls.js";
 import type {
   Lead,
   LeadCreate,
@@ -152,7 +153,7 @@ export async function searchOpportunities(
       `  Status: ${statusCol} | Pipeline: ${pipeline} | Salesperson: ${salesperson}`,
       `  Value: £${l.Value?.toFixed(2) ?? "0.00"} | Weighted: £${l.WeightedValue?.toFixed(2) ?? "0.00"} | Confidence: ${l.Guttometer ?? 0}%`,
       `  Est. Close: ${l.EstimatedClose?.substring(0, 10) || "N/A"} | Created: ${l.Created?.substring(0, 10) || "N/A"}`,
-      `  Link: ${l.RecordLink || "N/A"}`,
+      `  Link: ${toCrmLink(l.RecordLink)}`,
     ].join("\n");
   });
 
@@ -217,7 +218,7 @@ export async function getOpportunity(args: z.infer<typeof getOpportunitySchema>)
     `## Situation Summary`,
     lead.SituationSummary || "(none)",
     "",
-    `**CRM Link:** ${lead.RecordLink || "N/A"}`,
+    `**CRM Link:** ${toCrmLink(lead.RecordLink)}`,
   ].join("\n");
 }
 
@@ -278,7 +279,7 @@ export async function createOpportunity(
     `**Value:** £${created.Value?.toFixed(2) ?? "0.00"}`,
     `**Estimated Close:** ${created.EstimatedClose?.substring(0, 10) || "N/A"}`,
     `**Created:** ${created.Created?.substring(0, 10) || "now"}`,
-    `**CRM Link:** ${created.RecordLink || "N/A"}`,
+    `**CRM Link:** ${toCrmLink(created.RecordLink)}`,
   ].join("\n");
 }
 

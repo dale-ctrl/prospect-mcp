@@ -4,6 +4,7 @@
  */
 import { z } from "zod";
 import { getClient } from "../client.js";
+import { toCrmLink } from "../lib/urls.js";
 // ─── Schemas ──────────────────────────────────────────────────
 export const searchContractsSchema = z.object({
     divisionId: z.number().optional().describe("Filter by DivisionId (company)"),
@@ -57,7 +58,7 @@ export async function createContract(args) {
         `**Description:** ${created.ContractDesc || args.contractDesc || "N/A"}`,
         `**DivisionId:** ${args.divisionId}`,
         `**Type:** ${args.typeCode}`,
-        `**CRM Link:** ${created.RecordLink || "N/A"}`,
+        `**CRM Link:** ${toCrmLink(created.RecordLink)}`,
     ].join("\n");
 }
 export async function updateContract(args) {
@@ -137,7 +138,7 @@ export async function searchContracts(args) {
             `**Contract #${c.ContractId}** — ${c.ContractDesc || "(untitled)"}`,
             `  Company: ${company} | Type: ${type}`,
             `  Ref: ${c.AlternateReference || "N/A"} | ${scheduleInfo}`,
-            `  Link: ${c.RecordLink || "N/A"}`,
+            `  Link: ${toCrmLink(c.RecordLink)}`,
         ].join("\n");
     });
     return `Found ${filtered.length} contract(s):\n\n${lines.join("\n\n")}`;
@@ -182,7 +183,7 @@ export async function getContract(args) {
     else {
         output += "\n(no schedules)";
     }
-    output += `\n\n**CRM Link:** ${c.RecordLink || "N/A"}`;
+    output += `\n\n**CRM Link:** ${toCrmLink(c.RecordLink)}`;
     return output;
 }
 export async function searchContractSchedules(args) {

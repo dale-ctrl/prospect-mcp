@@ -4,6 +4,7 @@
  */
 import { z } from "zod";
 import { getClient } from "../client.js";
+import { toCrmLink } from "../lib/urls.js";
 // ─── Helpers ──────────────────────────────────────────────────
 /** Format Xtra (custom field) data into readable output */
 function formatXtraData(data) {
@@ -93,8 +94,8 @@ export async function getContactDetails(args) {
         `**Country:** ${addr?.Country || "N/A"}`,
         ``,
         `## Links`,
-        `**Contact Link:** ${contact.RecordLink || "N/A"}`,
-        `**Division Link:** ${div?.RecordLink || "N/A"}`,
+        `**Contact Link:** ${toCrmLink(contact.RecordLink)}`,
+        `**Division Link:** ${toCrmLink(div?.RecordLink)}`,
     ];
     if (xtra) {
         output.push("", "## Custom Fields (Xtra)");
@@ -148,7 +149,7 @@ export async function getDivisionDetails(args) {
         `## Contacts (${contacts.value.length})`,
         contactLines.length > 0 ? contactLines.join("\n") : "  (none found)",
         ``,
-        `**Division Link:** ${div.RecordLink || "N/A"}`,
+        `**Division Link:** ${toCrmLink(div.RecordLink)}`,
     ];
     if (equipmentMaintained || totalMaintenanceValue) {
         output.push("", "## Versa Maintenance");
@@ -285,7 +286,7 @@ export async function getLeadDetails(args) {
     else {
         output += "\n\n## Quotes\n(none)";
     }
-    output += `\n\n**Lead Link:** ${lead.RecordLink || "N/A"}`;
+    output += `\n\n**Lead Link:** ${toCrmLink(lead.RecordLink)}`;
     return output;
 }
 //# sourceMappingURL=extended.js.map

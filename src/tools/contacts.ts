@@ -6,6 +6,7 @@
 
 import { z } from "zod";
 import { getClient } from "../client.js";
+import { toCrmLink } from "../lib/urls.js";
 import { resolveDropdownValue } from "./dropdowns.js";
 import { resolveContactRole, resolveRoleCodeOrLabel, type ResolvedRole } from "../lib/role-mapper.js";
 
@@ -378,7 +379,7 @@ export async function createDivision(args: z.infer<typeof createDivisionSchema>)
     `**Website:** ${division.Website || "N/A"}`,
     `**Phone:** ${division.PhoneNumber || "N/A"}`,
     `**Created:** ${(division.Created as string)?.substring(0, 10) || "now"}`,
-    `**CRM Link:** ${division.RecordLink || "N/A"}`,
+    `**CRM Link:** ${toCrmLink(division.RecordLink as string | null | undefined)}`,
     xtraBody ? `**Custom dropdowns set on DivisionXtra:** ${Object.keys(xtraBody).join(", ")}` : "",
     "",
     `Next: Use **create_contact** with DivisionId ${divisionId} to add people at this company.`,
@@ -515,7 +516,7 @@ export async function createContact(args: z.infer<typeof createContactSchema>): 
   if (autoResolution) {
     lines.push(`**Role auto-resolved via:** ${autoResolution.matchedRule}`);
   }
-  lines.push(`**CRM Link:** ${created.RecordLink || "N/A"}`);
+  lines.push(`**CRM Link:** ${toCrmLink(created.RecordLink as string | null | undefined)}`);
   return lines.join("\n");
 }
 

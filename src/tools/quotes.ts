@@ -4,6 +4,7 @@
 
 import { z } from "zod";
 import { getClient } from "../client.js";
+import { toCrmLink } from "../lib/urls.js";
 import type { Quote, QuoteCreate, QuoteLine, Lead } from "../types/prospect.js";
 
 const OPERATING_COMPANY_CODE = "A"; // Westcountry Group
@@ -190,7 +191,7 @@ export async function searchQuotes(args: z.infer<typeof searchQuotesSchema>): Pr
       `  Status: ${status} | Salesperson: ${salesperson}`,
       `  Net: £${q.DecimalHomeNetValue?.toFixed(2) ?? "0.00"} | Gross: £${q.DecimalHomeGrossValue?.toFixed(2) ?? "0.00"} | Margin: ${q.MarginPercentage?.toFixed(1) ?? "N/A"}%`,
       `  Created: ${q.Created?.substring(0, 10) || "N/A"} | Price Expiry: ${q.EndDate?.substring(0, 10) || "(not set)"}`,
-      `  Link: ${q.RecordLink || "N/A"}`,
+      `  Link: ${toCrmLink(q.RecordLink)}`,
     ].join("\n");
   });
 
@@ -278,7 +279,7 @@ export async function getQuote(args: z.infer<typeof getQuoteSchema>): Promise<st
     output += "\n" + (xtraLines.length > 0 ? xtraLines.join("\n") : "(no custom fields set)");
   }
 
-  output += `\n\n**CRM Link:** ${quote.RecordLink || "N/A"}`;
+  output += `\n\n**CRM Link:** ${toCrmLink(quote.RecordLink)}`;
 
   return output;
 }
@@ -360,7 +361,7 @@ export async function createQuote(args: z.infer<typeof createQuoteSchema>): Prom
     `**Status:** ${created.StatusId}`,
     `**Created:** ${created.Created?.substring(0, 10) || "now"}`,
     `**Price Expiry:** ${priceExpiryWritten ? priceExpiry.substring(0, 10) : "❌ failed to write — please set manually in the Prospect UI"}`,
-    `**CRM Link:** ${created.RecordLink || "N/A"}`,
+    `**CRM Link:** ${toCrmLink(created.RecordLink)}`,
     "",
     `Next: Use **add_quote_line** with QuoteId ${created.QuoteId} to add line items.`,
   ].join("\n");
@@ -515,7 +516,7 @@ export async function duplicateQuote(args: z.infer<typeof duplicateQuoteSchema>)
     `**Lines copied:** ${linesCopied}`,
     `**Contact:** ${newQuote.ContactId}`,
     original.LeadId != null ? `**Linked opportunity:** Lead #${original.LeadId} (carried from original)` : "",
-    `**CRM Link:** ${newQuote.RecordLink || "N/A"}`,
+    `**CRM Link:** ${toCrmLink(newQuote.RecordLink)}`,
   ].filter(Boolean).join("\n");
 }
 

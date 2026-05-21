@@ -85,6 +85,26 @@ export const DROPDOWN_FIELDS = {
         keyField: "Id",
         extraFilter: "startswith(Id, 'Entity.DivisionXtra.StandardDropdownField5.')",
     },
+    // Custom dropdowns on LeadXtra (slot N → StandardDropdownField{N}). The
+    // underlying DropdownItems table follows the same FK pattern as DivisionXtra
+    // — slot is encoded in the Id prefix. WCG uses slot 1 = Waiting On,
+    // slot 2 = Delivery Type, slot 3 = Quote Template. Skill that creates a quote
+    // from an opportunity reads these to apply the correct service tier.
+    leadXtraDropdown1: {
+        entitySet: "DropdownItems",
+        keyField: "Id",
+        extraFilter: "startswith(Id, 'Entity.LeadXtra.StandardDropdownField1.')",
+    },
+    leadXtraDropdown2: {
+        entitySet: "DropdownItems",
+        keyField: "Id",
+        extraFilter: "startswith(Id, 'Entity.LeadXtra.StandardDropdownField2.')",
+    },
+    leadXtraDropdown3: {
+        entitySet: "DropdownItems",
+        keyField: "Id",
+        extraFilter: "startswith(Id, 'Entity.LeadXtra.StandardDropdownField3.')",
+    },
     // Built-in Division FKs
     standardIndustryCode: { entitySet: "StandardIndustryCodes", keyField: "Code" },
     deliveryZoneCode: { entitySet: "DeliveryZones", keyField: "Code" },

@@ -4,6 +4,7 @@
  */
 import { z } from "zod";
 import { getClient } from "../client.js";
+import { toCrmLink } from "../lib/urls.js";
 // ─── Schemas ──────────────────────────────────────────────────
 export const searchCampaignsSchema = z.object({
     description: z.string().optional().describe("Search in campaign name/description (partial match)"),
@@ -68,7 +69,7 @@ export async function createCampaign(args) {
         `**Description:** ${created.Description || args.description}`,
         `**Start:** ${args.startDate}`,
         `**Manager:** ${managerCode}`,
-        `**CRM Link:** ${created.RecordLink || "N/A"}`,
+        `**CRM Link:** ${toCrmLink(created.RecordLink)}`,
     ].join("\n");
 }
 export async function searchCampaigns(args) {
@@ -99,7 +100,7 @@ export async function searchCampaigns(args) {
         return [
             `**Campaign #${c.CampaignId}** — ${c.Description || "(untitled)"}`,
             `  Dates: ${start} → ${end} | Budget: ${budget} | Manager: ${manager}`,
-            `  Link: ${c.RecordLink || "N/A"}`,
+            `  Link: ${toCrmLink(c.RecordLink)}`,
         ].join("\n");
     });
     return `Found ${result.value.length} campaign(s):\n\n${lines.join("\n\n")}`;
@@ -137,7 +138,7 @@ export async function getCampaign(args) {
     else {
         output += "\n(no activities)";
     }
-    output += `\n\n**CRM Link:** ${c.RecordLink || "N/A"}`;
+    output += `\n\n**CRM Link:** ${toCrmLink(c.RecordLink)}`;
     return output;
 }
 export async function searchCampaignActivities(args) {

@@ -5,6 +5,7 @@
 
 import { z } from "zod";
 import { getClient } from "../client.js";
+import { toCrmLink } from "../lib/urls.js";
 
 // ─── Schemas ──────────────────────────────────────────────────
 
@@ -81,7 +82,7 @@ export async function createCampaign(args: z.infer<typeof createCampaignSchema>)
     `**Description:** ${created.Description || args.description}`,
     `**Start:** ${args.startDate}`,
     `**Manager:** ${managerCode}`,
-    `**CRM Link:** ${created.RecordLink || "N/A"}`,
+    `**CRM Link:** ${toCrmLink(created.RecordLink as string | null | undefined)}`,
   ].join("\n");
 }
 
@@ -114,7 +115,7 @@ export async function searchCampaigns(args: z.infer<typeof searchCampaignsSchema
     return [
       `**Campaign #${c.CampaignId}** — ${c.Description || "(untitled)"}`,
       `  Dates: ${start} → ${end} | Budget: ${budget} | Manager: ${manager}`,
-      `  Link: ${c.RecordLink || "N/A"}`,
+      `  Link: ${toCrmLink(c.RecordLink as string | null | undefined)}`,
     ].join("\n");
   });
 
@@ -160,7 +161,7 @@ export async function getCampaign(args: z.infer<typeof getCampaignSchema>): Prom
     output += "\n(no activities)";
   }
 
-  output += `\n\n**CRM Link:** ${c.RecordLink || "N/A"}`;
+  output += `\n\n**CRM Link:** ${toCrmLink(c.RecordLink as string | null | undefined)}`;
   return output;
 }
 

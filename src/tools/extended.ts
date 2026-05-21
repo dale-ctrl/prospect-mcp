@@ -5,6 +5,7 @@
 
 import { z } from "zod";
 import { getClient } from "../client.js";
+import { toCrmLink } from "../lib/urls.js";
 
 // ─── Helpers ──────────────────────────────────────────────────
 
@@ -109,8 +110,8 @@ export async function getContactDetails(args: z.infer<typeof getContactDetailsSc
     `**Country:** ${addr?.Country || "N/A"}`,
     ``,
     `## Links`,
-    `**Contact Link:** ${contact.RecordLink || "N/A"}`,
-    `**Division Link:** ${div?.RecordLink || "N/A"}`,
+    `**Contact Link:** ${toCrmLink(contact.RecordLink as string | null | undefined)}`,
+    `**Division Link:** ${toCrmLink(div?.RecordLink as string | null | undefined)}`,
   ];
 
   if (xtra) {
@@ -182,7 +183,7 @@ export async function getDivisionDetails(args: z.infer<typeof getDivisionDetails
     `## Contacts (${contacts.value.length})`,
     contactLines.length > 0 ? contactLines.join("\n") : "  (none found)",
     ``,
-    `**Division Link:** ${div.RecordLink || "N/A"}`,
+    `**Division Link:** ${toCrmLink(div.RecordLink as string | null | undefined)}`,
   ];
 
   if (equipmentMaintained || totalMaintenanceValue) {
@@ -348,7 +349,7 @@ export async function getLeadDetails(args: z.infer<typeof getLeadDetailsSchema>)
     output += "\n\n## Quotes\n(none)";
   }
 
-  output += `\n\n**Lead Link:** ${lead.RecordLink || "N/A"}`;
+  output += `\n\n**Lead Link:** ${toCrmLink(lead.RecordLink as string | null | undefined)}`;
 
   return output;
 }

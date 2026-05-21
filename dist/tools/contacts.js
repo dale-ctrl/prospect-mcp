@@ -5,6 +5,7 @@
  */
 import { z } from "zod";
 import { getClient } from "../client.js";
+import { toCrmLink } from "../lib/urls.js";
 import { resolveDropdownValue } from "./dropdowns.js";
 import { resolveContactRole, resolveRoleCodeOrLabel } from "../lib/role-mapper.js";
 // ─── Schemas ───────────────────────────────────────────────────
@@ -310,7 +311,7 @@ export async function createDivision(args) {
         `**Website:** ${division.Website || "N/A"}`,
         `**Phone:** ${division.PhoneNumber || "N/A"}`,
         `**Created:** ${division.Created?.substring(0, 10) || "now"}`,
-        `**CRM Link:** ${division.RecordLink || "N/A"}`,
+        `**CRM Link:** ${toCrmLink(division.RecordLink)}`,
         xtraBody ? `**Custom dropdowns set on DivisionXtra:** ${Object.keys(xtraBody).join(", ")}` : "",
         "",
         `Next: Use **create_contact** with DivisionId ${divisionId} to add people at this company.`,
@@ -444,7 +445,7 @@ export async function createContact(args) {
     if (autoResolution) {
         lines.push(`**Role auto-resolved via:** ${autoResolution.matchedRule}`);
     }
-    lines.push(`**CRM Link:** ${created.RecordLink || "N/A"}`);
+    lines.push(`**CRM Link:** ${toCrmLink(created.RecordLink)}`);
     return lines.join("\n");
 }
 export async function updateContact(args) {

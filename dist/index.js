@@ -499,7 +499,7 @@ server.tool("list_divisions", "Bulk-list Divisions for dedupe/reporting work. Fi
         return { content: [{ type: "text", text: `Error: ${err.message}` }], isError: true };
     }
 });
-server.tool("list_dropdown_options", "List the option rows behind a named dropdown. Use this to discover the FK code for a UI label (e.g. customerType='M.A.T.' → 'Entity.DivisionXtra.StandardDropdownField2.04a2188e'). Supports custom DivisionXtra dropdowns (customerType, paperAccountManager, officeAllocated, colouredPaperPriceList, laminatingPouchesList, customDropdown1..5) and built-in Division FKs (standardIndustryCode, deliveryZoneCode, priorityId, turnoverId). Returns { field, count, options: [{code, label}] }.", listDropdownOptionsSchema.shape, async (args) => {
+server.tool("list_dropdown_options", "List the option rows behind a named dropdown. Use this to discover the FK code for a UI label (e.g. customerType='M.A.T.' → 'Entity.DivisionXtra.StandardDropdownField2.04a2188e'). Supports custom DivisionXtra dropdowns (customerType, paperAccountManager, officeAllocated, colouredPaperPriceList, laminatingPouchesList, customDropdown1..5), custom LeadXtra dropdowns (leadXtraDropdown1=Waiting On, leadXtraDropdown2=Delivery Type, leadXtraDropdown3=Quote Template), and built-in Division FKs (standardIndustryCode, deliveryZoneCode, priorityId, turnoverId). Returns { field, count, options: [{code, label}] }.", listDropdownOptionsSchema.shape, async (args) => {
     try {
         const result = await listDropdownOptions(listDropdownOptionsSchema.parse(args));
         return { content: [{ type: "text", text: result }] };

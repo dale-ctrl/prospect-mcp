@@ -4,6 +4,7 @@
  */
 import { z } from "zod";
 import { getClient } from "../client.js";
+import { toCrmLink } from "../lib/urls.js";
 // ─── Schemas ──────────────────────────────────────────────────
 export const searchInventoriesSchema = z.object({
     description: z.string().optional().describe("Search in description (partial match)"),
@@ -96,7 +97,7 @@ export async function getInventory(args) {
         `**Manufacturer Ref:** ${inv.ManufacturerReference || "N/A"}`,
         "",
         inv.ExtendedDescription ? `## Notes\n${inv.ExtendedDescription}` : "",
-        `**CRM Link:** ${inv.RecordLink || "N/A"}`,
+        `**CRM Link:** ${toCrmLink(inv.RecordLink)}`,
     ].filter(Boolean).join("\n");
 }
 //# sourceMappingURL=inventories.js.map
