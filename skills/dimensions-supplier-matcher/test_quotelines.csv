@@ -1,0 +1,14 @@
+QuoteId,LineId,ProductCode,Description,Supplier
+Q12345,L1,ARW-DSK-160,Arrow Desk 1600mm,Arrow
+Q12345,L2,VER-CHR-MES,Versa Mesh Chair,Versa Furniture
+Q12345,L3,GRS-PED-3DR,Gresham 3-drawer pedestal,Gresham Office
+Q12345,L4,DMS-SCR-1200,DAMS Privacy Screen,DAMS
+Q12345,L5,SEN-MTG-ARC,Senator Arc Meeting Table,Senator
+Q12345,L6,HM-CHR-AERON,Herman Miller Aeron,Herman Miller
+Q12345,L7,KNP-CHR-PLU,Kinnarps Plus Chair,Kinnarps
+Q12345,L8,OB-SOFA-3S,Orangebox 3-seater,Orange Box
+Q12346,L1,UNK-001,Some random item,Brightline Furniture
+Q12346,L2,ARW-CHR-EXEC,Arrow Exec Chair,arrow group global ltd
+Q12346,L3,VER-DSK-180,Versa Desk 1800mm,
+Q12346,L4,ARW-MIS-001,Arrow item,ARRW001
+Q12346,L5,TRG-TBL-COFF,Trigon Coffee Table,Trigon
