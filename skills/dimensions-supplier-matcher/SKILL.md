@@ -116,19 +116,51 @@ Save under `inputs/` in the outputs folder (or wherever Dale points).
 
 Two routes:
 
-**(a) From Prospect CRM via MCP** — preferred when Dale gives a quote ID:
+**(a) From Prospect CRM via MCP** — preferred when the user gives a quote ID.
 
-```
-get_quote(quoteId=<id>)            -> quote header + line summary
-# For each line, pull the QuoteLineXtras to read the Supplier free-text field:
-get_xtra_fields(entityType='QuoteLineXtras', parentId=<lineId>)
-```
+1. Pull the quote header and line list:
+   ```
+   get_quote(quoteId=<id>)
+   ```
+2. **Filter out soft-deleted lines.** `get_quote` returns every QuoteLine
+   ever attached to the header, including ones the user has deleted. The
+   deleted ones do NOT contribute to the quote header totals. Reconcile sum
+   of live line Nets to the quote header Net — if they match, the lines
+   you've kept are the live set; if they don't, more lines are deleted than
+   you've identified and you must resolve before proceeding. The live lines
+   are always the ones with the HIGHER LineIds (added most recently);
+   deleted lines typically have older, lower LineIds. If unsure, ask the
+   user to confirm via a screenshot of the quote.
+3. **Pull the Supplier from the ProductItem master, NOT from the
+   QuoteLine.** The `Supplier` and `Supplier Code` fields visible on the
+   quote line in the CRM UI are product-defaulted at display time from the
+   ProductItem record — they are NOT held on `QuoteLineXtras`. Calling
+   `get_xtra_fields(entityType='QuoteLineXtras', ...)` returns "no values
+   stored" for the Supplier slot on virtually every line and wastes API
+   calls. Instead, for each live SKU, call:
+   ```
+   get_product_detail(productItemId=<SKU>)
+   ```
+   and read these fields from the response:
+   - `Manufacturer`  → this IS the Supplier name (e.g. "Pledge Office Chairs Ltd")
+   - `Mfr Ref`       → this IS the Supplier Code as the WCG team uses it
+                       (the manufacturer's own part reference, e.g. "MAS-1W")
 
-Build a CSV with at least these columns:
-- `QuoteId`, `LineId`, `ProductCode`, `Description`, `Supplier`
+   **The MCP wrapper labels these fields differently to the CRM UI.** In
+   `get_product_detail` output they appear as `Manufacturer` / `Mfr Ref`;
+   in the Prospect CRM UI they appear as `Supplier` / `Supplier Code`. They
+   are the same underlying fields.
 
-**(b) From an export file** — user provides directly. Just verify the file
-has a column whose header contains "supplier".
+4. Build a CSV with these columns:
+   - `QuoteId`, `LineId`, `ProductCode`, `Description`, `Supplier`, `SupplierCode`
+
+   `Supplier` is the Manufacturer name from ProductItem. `SupplierCode` is
+   the Mfr Ref from ProductItem.
+
+**(b) From an export file** — user provides directly. Verify the file has a
+column whose header contains "supplier" for the name. If a separate column
+holds the manufacturer's part reference, pass it through via
+`--mfr-ref-col`.
 
 ### Step 3 — Run the matcher
 
@@ -136,6 +168,7 @@ has a column whose header contains "supplier".
 python scripts/match_suppliers.py \
     --suppliers   inputs/dimensions_suppliers.csv \
     --quotelines  inputs/quotelines.csv \
+    --mfr-ref-col SupplierCode \
     --out         outputs/supplier_matches.xlsx
 ```
 
@@ -143,6 +176,10 @@ Optional flags:
 - `--threshold 85` to lower the confidence bar (default 90)
 - `--ambiguity-gap 5` to tighten ambiguity flagging (default 10)
 - `--supplier-col "Supplier Name"` if the free-text column has an unusual header
+- `--mfr-ref-col SupplierCode` to pass the manufacturer's part reference
+  through to the output as "Supplier Code (Mfr Ref)" alongside the
+  resolved Dimensions code. Always set this when the input CSV has a
+  manufacturer code column.
 
 The script prints a summary like:
 ```
@@ -161,7 +198,17 @@ Use `mcp__cowork__present_files` to share `supplier_matches.xlsx`. The
 spreadsheet has two sheets:
 - **Matches** — one row per quote line, colour-coded by status (green = exact,
   blue = confident, amber = ambiguous/review, red = no match, grey = missing).
+  Key columns appear side-by-side for review: `Supplier` (typed/defaulted
+  name), `Dims Code` (resolved Dimensions code, e.g. `PLED001`), `Supplier
+  Code (Mfr Ref)` (manufacturer's part reference from ProductItem, e.g.
+  `MAS-1W`), `Dims Supplier Name`, `Confidence`, `Status`.
 - **Summary** — count by status.
+
+**Do NOT add a "code mismatch" column comparing `Dims Code` to `Supplier
+Code (Mfr Ref)`.** They are two different identifiers (Dimensions supplier
+code vs the manufacturer's part reference) and they are SUPPOSED to differ.
+The output shows both so the human reviewer has the full picture, not so
+they can be flagged as inconsistent.
 
 ## Pitfalls
 
@@ -189,6 +236,27 @@ spreadsheet has two sheets:
    does not consume the QuoteLine custom field — so the write-back is effort
    with zero payoff. The deliverable is the review spreadsheet; the human
    updates Prospect by hand where they want to.
+7. **`get_quote` returns soft-deleted QuoteLines mixed in with live ones.**
+   The deleted ones do NOT contribute to the quote header totals. ALWAYS
+   reconcile sum of returned line Nets to the quote header Net before
+   trusting the line set. If they don't match, soft-deleted lines are in
+   the response — filter them out (live lines are typically the ones with
+   the highest, most recently created LineIds). If unsure, ask the user
+   for a screenshot.
+8. **The Supplier field on QuoteLineXtras is empty on virtually every
+   line.** Don't waste API calls trying to read it via
+   `get_xtra_fields(entityType='QuoteLineXtras', ...)`. The Supplier and
+   Supplier Code shown on the quote line in the CRM UI are
+   product-defaulted from the ProductItem master at display time. Pull
+   them with `get_product_detail(productItemId=<SKU>)` and read
+   `Manufacturer` (= Supplier name) and `Mfr Ref` (= Supplier Code).
+9. **Dimensions supplier codes are NOT stored in CRM at all.** The
+   `Supplier Code` field on ProductItem holds the *manufacturer's*
+   reference (e.g. `MAS-1W`, `BOW03 + UM12 + S69`) — that's intentional,
+   not a data-quality issue. The whole point of this skill is to RESOLVE
+   the supplier name to a Dimensions code at processing time, because
+   nobody has typed it into CRM and nobody is going to. Do not flag the
+   difference between Dimensions code and Supplier Code as a mismatch.
 
 ## Future extensions (not built yet)
 
@@ -212,6 +280,21 @@ spreadsheet has two sheets:
 
 ## Changelog
 
+- **2026-05-28 (v2)** — Three corrections from a real session against quote
+  14176. (1) `get_quote` returns soft-deleted QuoteLines; the skill now
+  requires reconciling sum of line Nets to header Net before trusting the
+  line set. (2) The Supplier field is product-defaulted from ProductItem
+  and is NOT held on QuoteLineXtras — the skill now sources it via
+  `get_product_detail` per SKU. Wrapper labels the fields as `Manufacturer`
+  and `Mfr Ref`, CRM UI labels them as `Supplier` and `Supplier Code`;
+  they are the same fields. (3) The Supplier Code on ProductItem is the
+  *manufacturer's* part reference (e.g. `MAS-1W`), not the Dimensions
+  supplier code — Dimensions codes are NOT held in CRM at all. The output
+  spreadsheet now shows `Dims Code` and `Supplier Code (Mfr Ref)`
+  side-by-side as informational columns, with no mismatch flag. Matcher
+  script gained `--mfr-ref-col` to pass the manufacturer code through, and
+  renamed `Matched Code`/`Matched Name` to `Dims Code`/`Dims Supplier
+  Name` in the output for clarity.
 - **2026-05-28** — Initial skill. Built from a Cowork session where Dale
   identified that the Prospect CRM `Supplier` QuoteLine custom field is free
   text, and the Dimensions purchase ledger needs the supplier code (e.g.

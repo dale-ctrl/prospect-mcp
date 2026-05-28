@@ -257,12 +257,12 @@ STATUS_FILL = {
 }
 
 
-def write_excel(df_in, results, supplier_text_col, out_path):
+def write_excel(df_in, results, supplier_text_col, out_path, mfr_ref_col=None):
     out_rows = []
     for orig_row, r in zip(df_in.to_dict(orient="records"), results):
         row = dict(orig_row)
-        row["Matched Code"] = r.code
-        row["Matched Name"] = r.name
+        row["Dims Code"] = r.code
+        row["Dims Supplier Name"] = r.name
         row["Confidence"] = r.score
         row["Status"] = r.status
         row["Ambiguous?"] = "Y" if r.ambiguous else ""
@@ -281,12 +281,25 @@ def write_excel(df_in, results, supplier_text_col, out_path):
 
     out_df = pd.DataFrame(out_rows)
 
-    # Move free-text supplier column next to Matched Code for easy review
+    # Move free-text supplier column next to Dims Code for easy review
     cols = list(out_df.columns)
-    if supplier_text_col in cols and "Matched Code" in cols:
+    if supplier_text_col in cols and "Dims Code" in cols:
         cols.remove(supplier_text_col)
-        insert_at = cols.index("Matched Code")
+        insert_at = cols.index("Dims Code")
         cols.insert(insert_at, supplier_text_col)
+        out_df = out_df[cols]
+
+    # If a manufacturer-reference column was named, rename it to
+    # "Supplier Code (Mfr Ref)" and position it directly after Dims Code
+    # so the reviewer sees both identifiers side-by-side. They are
+    # SUPPOSED to differ (different identifier systems) — this is not a
+    # mismatch flag, just the full picture for the human reviewer.
+    if mfr_ref_col and mfr_ref_col in out_df.columns:
+        out_df = out_df.rename(columns={mfr_ref_col: "Supplier Code (Mfr Ref)"})
+        cols = list(out_df.columns)
+        cols.remove("Supplier Code (Mfr Ref)")
+        insert_at = cols.index("Dims Code") + 1
+        cols.insert(insert_at, "Supplier Code (Mfr Ref)")
         out_df = out_df[cols]
 
     with pd.ExcelWriter(out_path, engine="openpyxl") as writer:
@@ -337,6 +350,12 @@ def main(argv=None):
     p.add_argument("--out", required=True, type=Path, help="Output XLSX path")
     p.add_argument("--supplier-col", default=None,
                    help="Override column name for the free-text supplier in quotelines")
+    p.add_argument("--mfr-ref-col", default=None,
+                   help="Column name in quotelines holding the manufacturer's "
+                        "part reference (the 'Supplier Code' field on ProductItem "
+                        "as WCG uses it). When set, the column is renamed to "
+                        "'Supplier Code (Mfr Ref)' and positioned next to Dims "
+                        "Code in the output for side-by-side review.")
     p.add_argument("--threshold", type=int, default=90,
                    help="Confidence threshold (default 90)")
     p.add_argument("--ambiguity-gap", type=int, default=10,
@@ -370,7 +389,8 @@ def main(argv=None):
     ]
 
     args.out.parent.mkdir(parents=True, exist_ok=True)
-    write_excel(qline_df, results, supplier_text_col, args.out)
+    write_excel(qline_df, results, supplier_text_col, args.out,
+                mfr_ref_col=args.mfr_ref_col)
 
     counts = Counter(r.status for r in results)
     print()
