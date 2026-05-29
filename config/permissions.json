@@ -69,6 +69,12 @@
         }
       },
       "notes": "Admin — full access + messaging opt-in for smoke testing"
+    },
+    "JB": {
+      "name": "Justyna Bekier",
+      "writeAllow": "",
+      "permissions": {},
+      "notes": "Purchasing Administrator"
     }
   },
   "defaults": {
