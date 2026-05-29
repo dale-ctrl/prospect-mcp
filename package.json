@@ -1,6 +1,6 @@
 {
   "name": "prospect-crm-mcp",
-  "version": "1.19.0",
+  "version": "1.19.1",
   "description": "MCP server for Prospect365 CRM - Quote management for WCG",
   "type": "module",
   "main": "dist/index.js",
@@ -24,6 +24,7 @@
     "test:status-details": "node --test dist/test-status-details.js",
     "test:quote-line-xtra": "node --test dist/test-quote-line-xtra.js",
     "test:quote-line-discount": "node --test dist/test-quote-line-discount.js",
+    "test:knowledge-path": "node --test dist/test-knowledge-path.js",
     "test:search-products": "node --test dist/test-search-products.js",
     "enable-autoupdate": "node scripts/enable-autoupdate.cjs",
     "setup": "node scripts/setup.cjs"

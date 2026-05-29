@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// prospect-crm-mcp v1.19.0 — bundled by esbuild on 2026-05-29T08:26:24.954Z
+// prospect-crm-mcp v1.19.1 — bundled by esbuild on 2026-05-29T09:10:21.168Z
 // Single-file MCP server; no node_modules required at runtime.
 var __create = Object.create;
 var __defProp = Object.defineProperty;
@@ -28857,9 +28857,21 @@ async function getContactProfiling(args) {
 import { readFileSync as readFileSync2, appendFileSync, existsSync as existsSync2, mkdirSync as mkdirSync2 } from "fs";
 import { dirname as dirname2, join as join2 } from "path";
 import { fileURLToPath } from "url";
+import { homedir as homedir2 } from "os";
 var __filename = fileURLToPath(import.meta.url);
 var __dirname = dirname2(__filename);
-var KNOWLEDGE_DIR = process.env.WCG_KNOWLEDGE_PATH || join2(__dirname, "..", "..", "reference");
+function resolveKnowledgeDir(env = process.env) {
+  if (env.WCG_KNOWLEDGE_PATH) return env.WCG_KNOWLEDGE_PATH;
+  const wcgOneDrive = join2(
+    homedir2(),
+    "OneDrive - Westcountry Group",
+    "Estimating Team",
+    "Claude"
+  );
+  if (existsSync2(wcgOneDrive)) return wcgOneDrive;
+  return join2(__dirname, "..", "..", "reference");
+}
+var KNOWLEDGE_DIR = resolveKnowledgeDir();
 var LESSONS_FILE = join2(KNOWLEDGE_DIR, "quoting-lessons.md");
 var PRODUCT_NOTES_FILE = join2(KNOWLEDGE_DIR, "product-notes.md");
 function ensureDir() {
@@ -28957,13 +28969,13 @@ ${matches.join("\n")}`;
 // src/permissions.ts
 import { readFileSync as readFileSync3, writeFileSync as writeFileSync2, existsSync as existsSync3, renameSync, mkdirSync as mkdirSync3 } from "fs";
 import { join as join3, dirname as dirname3 } from "path";
-import { homedir as homedir2 } from "os";
+import { homedir as homedir3 } from "os";
 import { fileURLToPath as fileURLToPath2 } from "url";
 var __permsFilename = fileURLToPath2(import.meta.url);
 var __permsDirname = dirname3(__permsFilename);
 var DEFAULT_PERMISSIONS_URL = "https://raw.githubusercontent.com/dale-ctrl/prospect-mcp/main/config/permissions.json";
 var PERMISSIONS_URL = process.env.PROSPECT_PERMISSIONS_URL || DEFAULT_PERMISSIONS_URL;
-var CACHE_DIR = join3(homedir2(), ".prospect-crm");
+var CACHE_DIR = join3(homedir3(), ".prospect-crm");
 var CACHE_PATH = join3(CACHE_DIR, "permissions-cache.json");
 var BUNDLED_PATH = join3(__permsDirname, "..", "config", "permissions.json");
 var FETCH_TIMEOUT_MS = 5e3;
