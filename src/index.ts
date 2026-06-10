@@ -91,6 +91,10 @@ import {
 } from "./tools/versa-maintenance.js";
 
 import {
+  updateDivisionXtraSchema, updateDivisionXtra,
+} from "./tools/division-xtra.js";
+
+import {
   getProductCategoriesSchema, getProductCategories,
   searchProductsByCategorySchema, searchProductsByCategory,
   getContactPreferencesSchema, getContactPreferences,
@@ -462,6 +466,7 @@ const TOOL_PERMISSION_MAP: Record<string, { module: string; action: string }> = 
   update_contact: { module: "contacts", action: "edit" },
   create_division: { module: "contacts", action: "create" },
   update_division: { module: "contacts", action: "edit" },
+  update_division_xtra: { module: "contacts", action: "edit" },
   create_opportunity: { module: "opportunities", action: "create" },
   update_opportunity: { module: "opportunities", action: "edit" },
   create_task: { module: "tasks", action: "create" },
@@ -2077,6 +2082,9 @@ server.tool("report_account_financials", "Complete financial overview for a divi
 
 registerWriteTool("update_division", "Update a division/company — change name, phone, website, employee count, territory, relationship, notes, etc. New in v1.6: pass companyId to re-parent the Division under a different Company (e.g. a MAT Trust). For dedicated reparenting workflows prefer reparent_division — separately permissioned via divisions.reparent.", updateDivisionSchema.shape,
   async (args) => { try { const result = await updateDivision(updateDivisionSchema.parse(args)); return { content: [{ type: "text" as const, text: result }] }; } catch (err) { return { content: [{ type: "text" as const, text: `Error: ${(err as Error).message}` }], isError: true }; } });
+
+registerWriteTool("update_division_xtra", "Write DivisionXtra custom-field slots on a Division — memo, text, dropdown, date, decimal, or flag. Pass `fields` keyed by friendly label (e.g. 'Full Delivery Address'), slot identifier ('StandardMemoField3'), or raw column ('x_365_custom_memo_3'); null clears a slot. Upserts the DivisionXtra row if absent. Use get_xtra_fields(entityType='DivisionXtras', parentId=<divisionId>) to discover slots/labels. Generic counterpart to update_quote_line_xtra.", updateDivisionXtraSchema.shape,
+  async (args) => { try { const result = await updateDivisionXtra(updateDivisionXtraSchema.parse(args)); return { content: [{ type: "text" as const, text: result }] }; } catch (err) { return { content: [{ type: "text" as const, text: `Error: ${(err as Error).message}` }], isError: true }; } });
 
 // ─── Cleanup + hierarchy tools (v1.6.0) ───────────────────────
 

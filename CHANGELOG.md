@@ -6,6 +6,20 @@ The format is based on Keep a Changelog, and this project adheres to Semantic Ve
 
 ## [Unreleased]
 
+## [1.20.0] - 2026-06-10
+### Added — generic DivisionXtra writer
+
+New MCP write tool `update_division_xtra` — sets any DivisionXtra custom-field slot (memo / text / dropdown / date / decimal / flag) on a Division, keyed by friendly label, slot identifier, or raw column name. The Division-level counterpart to `update_quote_line_xtra`.
+
+- **Motivating case**: the "Full Delivery Address" field on the Division Delivery Address tab is `DivisionXtra.StandardMemoField3` (`x_365_custom_memo_3`). Until now the only DivisionXtra writers were `update_division` (dropdowns only) and `update_division_versa_maintenance` (TextField5/6), so memo/text/date/decimal/flag slots could only be set through the Prospect web UI.
+- **Shared resolver**: reuses `loadXtraSlots` and `resolveXtraFieldsToBody` from `src/lib/xtra-labels.ts`, so all three key forms (friendly label e.g. `"Full Delivery Address"`, slot identifier `"StandardMemoField3"`, raw column `"x_365_custom_memo_3"`) work identically here as they do on `update_quote_line_xtra`.
+- **Upsert contract**: mirrors `upsertDivisionXtra` in `src/tools/versa-maintenance.ts` — PATCH `DivisionXtras(divisionId)`; on HTTP 404 POST a new row keyed by `DivisionId`. Read back via `$filter=DivisionId eq <id>` and return the row.
+- **Permissions**: gated via `contacts.edit` — same mapping as `update_division`, since editing a Division's own custom fields sits under the contacts module (the `divisions` module is reserved for cross-entity Division moves).
+- **Discovery**: callers can list available slots and friendly labels via `get_xtra_fields(entityType='DivisionXtras', parentId=<divisionId>)` before writing.
+- Unknown field keys produce the resolver's existing `"Unknown Xtra field(s)"` error with the valid-options list.
+
+5 unit tests added to `src/test-division-writes.ts` covering: friendly-label resolution to `StandardMemoField3` (the Full Delivery Address case), identifier/raw-column resolution, empty-fields no-op, PATCH→POST 404 fallback, and unknown-key rejection.
+
 ## [1.13.0] - 2026-05-19
 ### Changed — skill content updates from the Grenfell Hall retrospective
 

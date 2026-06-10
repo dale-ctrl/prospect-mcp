@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// prospect-crm-mcp v1.19.1 — bundled by esbuild on 2026-05-29T09:10:21.168Z
+// prospect-crm-mcp v1.20.0 — bundled by esbuild on 2026-06-10T06:40:04.110Z
 // Single-file MCP server; no node_modules required at runtime.
 var __create = Object.create;
 var __defProp = Object.defineProperty;
@@ -24338,6 +24338,53 @@ async function mergeDivisionDocument(input) {
   });
 }
 
+// src/tools/division-xtra.ts
+var updateDivisionXtraSchema = external_exports.object({
+  divisionId: external_exports.number().int().positive().describe(
+    "DivisionId whose DivisionXtra row to update (matches DivisionXtra.DivisionId)."
+  ),
+  fields: external_exports.record(external_exports.string(), external_exports.union([external_exports.string(), external_exports.number(), external_exports.boolean(), external_exports.null()])).describe(
+    "Custom-field values keyed by ANY of: (1) friendly label when configured (e.g. 'Full Delivery Address'), (2) slot identifier 'StandardTextField1..10', 'StandardMemoField1..5', 'StandardDropdownField1..5', 'StandardDateField1..5', 'StandardDecimalField1..5', 'StandardFlagField1..5', or (3) raw column name 'x_365_custom_<type>_<n>' (text/memo/dropdown/date/decimal/flag). Pass null to clear a slot. Use get_xtra_fields(entityType='DivisionXtras', parentId=<divisionId>) to see all slots and their labels."
+  )
+});
+async function upsertDivisionXtra2(divisionId, body) {
+  const client = getClient();
+  try {
+    await client.patch("DivisionXtras", divisionId, body);
+  } catch (err) {
+    const msg = err.message || "";
+    if (/HTTP 404/.test(msg)) {
+      await client.post("DivisionXtras", {
+        DivisionId: divisionId,
+        ...body
+      });
+    } else {
+      throw err;
+    }
+  }
+  const sp = new URLSearchParams();
+  sp.set("$filter", `DivisionId eq ${divisionId}`);
+  sp.set("$top", "1");
+  const result = await client.get("DivisionXtras", sp.toString());
+  return result.value[0] ?? { DivisionId: divisionId, ...body };
+}
+async function updateDivisionXtra(input) {
+  const args = updateDivisionXtraSchema.parse(input);
+  const client = getClient();
+  if (!args.fields || Object.keys(args.fields).length === 0) {
+    return `No fields provided to update on DivisionXtra ${args.divisionId}.`;
+  }
+  const slots = await loadXtraSlots(client, "DivisionXtras").catch(() => []);
+  const body = resolveXtraFieldsToBody(slots, args.fields);
+  const row = await upsertDivisionXtra2(args.divisionId, body);
+  return JSON.stringify({
+    ok: true,
+    divisionId: args.divisionId,
+    fieldsUpdated: Object.keys(body),
+    row
+  });
+}
+
 // src/tools/catalogue.ts
 var getProductCategoriesSchema = external_exports.object({
   includeObsolete: external_exports.boolean().optional().default(false).describe("Include obsolete categories")
@@ -29161,6 +29208,7 @@ var TOOL_PERMISSION_MAP = {
   update_contact: { module: "contacts", action: "edit" },
   create_division: { module: "contacts", action: "create" },
   update_division: { module: "contacts", action: "edit" },
+  update_division_xtra: { module: "contacts", action: "edit" },
   create_opportunity: { module: "opportunities", action: "create" },
   update_opportunity: { module: "opportunities", action: "edit" },
   create_task: { module: "tasks", action: "create" },
@@ -30855,6 +30903,19 @@ registerWriteTool(
   async (args) => {
     try {
       const result = await updateDivision(updateDivisionSchema.parse(args));
+      return { content: [{ type: "text", text: result }] };
+    } catch (err) {
+      return { content: [{ type: "text", text: `Error: ${err.message}` }], isError: true };
+    }
+  }
+);
+registerWriteTool(
+  "update_division_xtra",
+  "Write DivisionXtra custom-field slots on a Division \u2014 memo, text, dropdown, date, decimal, or flag. Pass `fields` keyed by friendly label (e.g. 'Full Delivery Address'), slot identifier ('StandardMemoField3'), or raw column ('x_365_custom_memo_3'); null clears a slot. Upserts the DivisionXtra row if absent. Use get_xtra_fields(entityType='DivisionXtras', parentId=<divisionId>) to discover slots/labels. Generic counterpart to update_quote_line_xtra.",
+  updateDivisionXtraSchema.shape,
+  async (args) => {
+    try {
+      const result = await updateDivisionXtra(updateDivisionXtraSchema.parse(args));
       return { content: [{ type: "text", text: result }] };
     } catch (err) {
       return { content: [{ type: "text", text: `Error: ${err.message}` }], isError: true };

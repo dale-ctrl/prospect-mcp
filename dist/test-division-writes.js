@@ -14,6 +14,7 @@ process.env.PROSPECT_BASE_URL =
 process.env.PROSPECT_PROFILE_ID = process.env.PROSPECT_PROFILE_ID || "test-profile-id";
 const { createDivision, updateDivision } = await import("./tools/contacts.js");
 const { __resetDropdownCache } = await import("./tools/dropdowns.js");
+const { updateDivisionXtra } = await import("./tools/division-xtra.js");
 /**
  * The label→FK translator now hits /DropdownItems on every dropdown write.
  * Tests in this file use synthetic codes ("v1".."v5", "M.A.T.", "Special").
@@ -261,6 +262,152 @@ test("create_division: explicitly POSTs a Company first (does not rely on auto-c
         const divPost = mock.calls.find((c) => c.method === "POST" && c.url.endsWith("/Divisions"));
         const dBody = divPost.body;
         assert.equal(dBody.CompanyId, 9003, "Division POST must reference the just-created CompanyId");
+    }
+    finally {
+        mock.restore();
+    }
+});
+// ─── update_division_xtra ────────────────────────────────────────────────────
+/**
+ * Realistic EntityFields response for DivisionXtra — enough for the
+ * resolver to recognise StandardMemoField3 as 'Full Delivery Address'
+ * (the motivating case for this tool). Mirrors the QUOTE_LINE_XTRA_ENTITY_FIELDS
+ * shape used in test-quote-line-xtra.ts.
+ */
+const DIVISION_XTRA_ENTITY_FIELDS = {
+    json: {
+        value: [
+            { EntityId: "DivisionXtra", FieldName: "StandardMemoField3", ColumnName: "x_365_custom_memo_3" },
+            { EntityId: "DivisionXtra", FieldName: "StandardTextField5", ColumnName: "x_365_custom_text_5" },
+            { EntityId: "DivisionXtra", FieldName: "StandardDropdownField2", ColumnName: "x_365_custom_dropdown_2" },
+        ],
+    },
+};
+test("update_division_xtra: 'Full Delivery Address' label resolves to StandardMemoField3 in PATCH body", async () => {
+    // The motivating case: write a multi-line postal address into the memo
+    // slot that backs the Division Delivery Address tab.
+    const address = "Line 1,\nLine 2,\nTOWN,\nPOSTCODE";
+    const mock = installFetchMock((call) => {
+        if (call.url.includes("/Info()"))
+            return { json: { ProfileId: "p" } };
+        if (call.url.includes("/EntityFields"))
+            return DIVISION_XTRA_ENTITY_FIELDS;
+        if (call.url.includes("/Translations")) {
+            return {
+                json: {
+                    value: [
+                        { RowIdentity: "Entity.DivisionXtra.StandardMemoField3:en-GB", Value: "Full Delivery Address" },
+                    ],
+                },
+            };
+        }
+        if (call.url.includes("/DivisionXtras(5380)") && call.method === "PATCH")
+            return { status: 204 };
+        if (call.url.includes("/DivisionXtras") && call.method === "GET") {
+            return { json: { value: [{ DivisionId: 5380, StandardMemoField3: address }] } };
+        }
+        return { json: { value: [] } };
+    });
+    try {
+        const out = await updateDivisionXtra({
+            divisionId: 5380,
+            fields: { "Full Delivery Address": address },
+        });
+        const patch = mock.calls.find((c) => c.method === "PATCH" && c.url.includes("/DivisionXtras(5380)"));
+        assert.ok(patch, "expected PATCH /DivisionXtras(5380)");
+        const body = patch.body;
+        assert.equal(body.StandardMemoField3, address, `body must set StandardMemoField3 to the address: ${JSON.stringify(body)}`);
+        assert.ok(!("Full Delivery Address" in body), "friendly label must be resolved out of the body, not pass through verbatim");
+        // Output is JSON — assert the success contract.
+        const parsed = JSON.parse(out);
+        assert.equal(parsed.ok, true);
+        assert.equal(parsed.divisionId, 5380);
+        assert.deepEqual(parsed.fieldsUpdated, ["StandardMemoField3"]);
+    }
+    finally {
+        mock.restore();
+    }
+});
+test("update_division_xtra: identifier and raw-column forms both resolve to StandardMemoField3", async () => {
+    for (const key of ["StandardMemoField3", "x_365_custom_memo_3"]) {
+        const mock = installFetchMock((call) => {
+            if (call.url.includes("/Info()"))
+                return { json: { ProfileId: "p" } };
+            if (call.url.includes("/EntityFields"))
+                return DIVISION_XTRA_ENTITY_FIELDS;
+            if (call.url.includes("/DivisionXtras(5380)") && call.method === "PATCH")
+                return { status: 204 };
+            if (call.url.includes("/DivisionXtras") && call.method === "GET") {
+                return { json: { value: [{ DivisionId: 5380, StandardMemoField3: "v" }] } };
+            }
+            return { json: { value: [] } };
+        });
+        try {
+            await updateDivisionXtra({ divisionId: 5380, fields: { [key]: "v" } });
+            const patch = mock.calls.find((c) => c.method === "PATCH" && c.url.includes("/DivisionXtras(5380)"));
+            const body = patch.body;
+            assert.equal(body.StandardMemoField3, "v", `${key} should land on StandardMemoField3: ${JSON.stringify(body)}`);
+        }
+        finally {
+            mock.restore();
+        }
+    }
+});
+test("update_division_xtra: with no fields returns the no-op message and makes zero HTTP calls", async () => {
+    const mock = installFetchMock(() => ({ status: 204 }));
+    try {
+        const out = await updateDivisionXtra({ divisionId: 5380, fields: {} });
+        assert.ok(out.toLowerCase().includes("no fields"), `expected no-op message, got: ${out}`);
+        assert.equal(mock.calls.length, 0, "should make zero HTTP calls when fields is empty");
+    }
+    finally {
+        mock.restore();
+    }
+});
+test("update_division_xtra: falls back to POST /DivisionXtras when PATCH returns 404", async () => {
+    let patchAttempts = 0;
+    const mock = installFetchMock((call) => {
+        if (call.url.includes("/Info()"))
+            return { json: { ProfileId: "p" } };
+        if (call.url.includes("/EntityFields"))
+            return DIVISION_XTRA_ENTITY_FIELDS;
+        if (call.url.includes("/DivisionXtras(5380)") && call.method === "PATCH") {
+            patchAttempts++;
+            return { status: 404, json: { error: { message: "Not found" } } };
+        }
+        if (call.url.includes("/DivisionXtras") && call.method === "POST") {
+            return { status: 201, json: { DivisionId: 5380, StandardMemoField3: "v" } };
+        }
+        if (call.url.includes("/DivisionXtras") && call.method === "GET") {
+            return { json: { value: [{ DivisionId: 5380, StandardMemoField3: "v" }] } };
+        }
+        return { json: { value: [] } };
+    });
+    try {
+        const out = await updateDivisionXtra({ divisionId: 5380, fields: { StandardMemoField3: "v" } });
+        const parsed = JSON.parse(out);
+        assert.equal(parsed.ok, true);
+        assert.equal(patchAttempts, 1, "should try PATCH exactly once before POST fallback");
+        const post = mock.calls.find((c) => c.method === "POST" && c.url.endsWith("/DivisionXtras"));
+        assert.ok(post, "expected POST /DivisionXtras fallback");
+        const body = post.body;
+        assert.equal(body.DivisionId, 5380, "POST body must include DivisionId");
+        assert.equal(body.StandardMemoField3, "v");
+    }
+    finally {
+        mock.restore();
+    }
+});
+test("update_division_xtra: rejects an unknown field key with the resolver's helpful list of valid slots", async () => {
+    const mock = installFetchMock((call) => {
+        if (call.url.includes("/Info()"))
+            return { json: { ProfileId: "p" } };
+        if (call.url.includes("/EntityFields"))
+            return DIVISION_XTRA_ENTITY_FIELDS;
+        return { json: { value: [] } };
+    });
+    try {
+        await assert.rejects(() => updateDivisionXtra({ divisionId: 5380, fields: { Bogus: "x" } }), /Unknown Xtra field.*Bogus/i);
     }
     finally {
         mock.restore();
