@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// prospect-crm-mcp v1.20.0 — bundled by esbuild on 2026-06-10T06:40:04.110Z
+// prospect-crm-mcp v1.21.0 — bundled by esbuild on 2026-06-17T14:35:18.349Z
 // Single-file MCP server; no node_modules required at runtime.
 var __create = Object.create;
 var __defProp = Object.defineProperty;
@@ -24588,6 +24588,144 @@ async function getInventoryLookups() {
   ].join("\n");
 }
 
+// src/tools/products.ts
+function ncPrefixForToday(date3 = /* @__PURE__ */ new Date()) {
+  const dd = String(date3.getDate()).padStart(2, "0");
+  const mm = String(date3.getMonth() + 1).padStart(2, "0");
+  const yy = String(date3.getFullYear()).slice(-2);
+  return `NC${dd}${mm}${yy}`;
+}
+async function nextNcCode(client) {
+  const prefix = ncPrefixForToday();
+  const res = await client.get(
+    "ProductItems",
+    `$filter=startswith(ProductItemId,'${prefix}')&$select=ProductItemId&$top=200`
+  );
+  let max = 0;
+  for (const p of res.value) {
+    const code = String(p.ProductItemId ?? "");
+    const tail = code.slice(prefix.length);
+    const n = parseInt(tail, 10);
+    if (!Number.isNaN(n) && n > max) max = n;
+  }
+  return `${prefix}${String(max + 1).padStart(2, "0")}`;
+}
+var createProductSchema = external_exports.object({
+  productItemId: external_exports.string().optional().describe(
+    "Product code / SKU. Omit AND set autoCode=true to auto-generate the next NC code for today (NC+DDMMYY+NN). If supplied, used verbatim."
+  ),
+  autoCode: external_exports.boolean().optional().default(false).describe(
+    "When true and productItemId is omitted, generate the next free NC<DDMMYY><NN> code by scanning existing ProductItems. Ignored if productItemId is supplied."
+  ),
+  description: external_exports.string().describe("Product description (required) \u2014 carries to quote lines and Dimensions orders."),
+  sellPrice: external_exports.number().describe("Unit sell price in \xA3 (DecimalSellingPrice)."),
+  costPrice: external_exports.number().describe("Unit cost price in \xA3 (DecimalCostPrice)."),
+  manufacturer: external_exports.string().optional().describe("Supplier / manufacturer name, e.g. 'Hawk Furniture Ltd'."),
+  manufacturerReference: external_exports.string().optional().describe("Supplier's own product code / manufacturer reference, e.g. 'WESTCOUNTRY-31797'."),
+  categoryId: external_exports.string().optional().describe("ProductCategory code \u2014 use get_product_categories to list."),
+  unitDescription: external_exports.string().optional().default("Each").describe("Unit of measure (default 'Each')."),
+  salesAnalysis: external_exports.string().optional().describe("Access Dimensions sales nominal string, e.g. '10-1-4000-000'. Match a comparable catalogue item if unsure."),
+  extendedDescription: external_exports.string().optional().describe("Long-form description / spec (the product blurb shown on quotes)."),
+  specification: external_exports.string().optional().describe("Specification notes (internal-facing detail)."),
+  internalNotes: external_exports.string().optional().describe("Internal notes."),
+  alternateReference1: external_exports.string().optional().describe("Alternate reference 1."),
+  alternateReference2: external_exports.string().optional().describe("Alternate reference 2."),
+  barcode: external_exports.string().optional().describe("Barcode."),
+  taxCode: external_exports.string().optional().describe("Tax / VAT code (defaults to the tenant standard if omitted)."),
+  obsolete: external_exports.boolean().optional().default(false).describe("Mark obsolete on creation (default false).")
+});
+var updateProductSchema = external_exports.object({
+  productItemId: external_exports.string().describe("Product code / SKU (ProductItemId) to update."),
+  description: external_exports.string().optional(),
+  sellPrice: external_exports.number().optional().describe("Unit sell price in \xA3 (DecimalSellingPrice)."),
+  costPrice: external_exports.number().optional().describe("Unit cost price in \xA3 (DecimalCostPrice)."),
+  manufacturer: external_exports.string().optional(),
+  manufacturerReference: external_exports.string().optional(),
+  categoryId: external_exports.string().optional(),
+  unitDescription: external_exports.string().optional(),
+  salesAnalysis: external_exports.string().optional(),
+  extendedDescription: external_exports.string().optional(),
+  specification: external_exports.string().optional(),
+  internalNotes: external_exports.string().optional(),
+  obsolete: external_exports.boolean().optional()
+});
+async function createProduct(args) {
+  const client = getClient();
+  let code = args.productItemId?.trim();
+  if (!code) {
+    if (!args.autoCode) {
+      return "No productItemId supplied. Either pass productItemId, or set autoCode=true to auto-generate the next NC<DDMMYY><NN> code.";
+    }
+    code = await nextNcCode(client);
+  }
+  const existing = await client.get(
+    "ProductItems",
+    `$filter=ProductItemId eq '${code}'&$select=ProductItemId&$top=1`
+  );
+  if (existing.value.length > 0) {
+    return `Product '${code}' already exists. Pick a different code (or use autoCode=true to take the next free NC number), then retry.`;
+  }
+  const margin = args.sellPrice > 0 ? ((args.sellPrice - args.costPrice) / args.sellPrice * 100).toFixed(1) : "N/A";
+  const body = {
+    ProductItemId: code,
+    Description: args.description,
+    DecimalSellingPrice: args.sellPrice,
+    DecimalCostPrice: args.costPrice,
+    UnitDescription: args.unitDescription ?? "Each",
+    Obsolete: args.obsolete ? 1 : 0
+  };
+  if (args.manufacturer !== void 0) body.Manufacturer = args.manufacturer;
+  if (args.manufacturerReference !== void 0) body.ManufacturerReference = args.manufacturerReference;
+  if (args.categoryId !== void 0) body.CategoryId = args.categoryId;
+  if (args.salesAnalysis !== void 0) body.SalesAnalysis = args.salesAnalysis;
+  if (args.extendedDescription !== void 0) body.ExtendedDescription = args.extendedDescription;
+  if (args.specification !== void 0) body.Specification = args.specification;
+  if (args.internalNotes !== void 0) body.InternalNotes = args.internalNotes;
+  if (args.alternateReference1 !== void 0) body.AlternateReference1 = args.alternateReference1;
+  if (args.alternateReference2 !== void 0) body.AlternateReference2 = args.alternateReference2;
+  if (args.barcode !== void 0) body.Barcode = args.barcode;
+  if (args.taxCode !== void 0) body.TaxCode = args.taxCode;
+  const created = await client.post("ProductItems", body);
+  const check2 = await client.get(
+    "ProductItems",
+    `$filter=ProductItemId eq '${code}'&$select=ProductItemId,Description,DecimalSellingPrice,DecimalCostPrice,Manufacturer,ManufacturerReference,CategoryId`
+  );
+  const p = check2.value[0] ?? created;
+  const sell = typeof p.DecimalSellingPrice === "number" ? `\xA3${p.DecimalSellingPrice.toFixed(2)}` : "N/A";
+  const cost = typeof p.DecimalCostPrice === "number" ? `\xA3${p.DecimalCostPrice.toFixed(2)}` : "N/A";
+  const warn = sell === "\xA30.00" || cost === "\xA30.00" ? "\n\n\u26A0\uFE0F Sell or cost persisted as \xA30.00 \u2014 the server likely ignored the Decimal* fields on POST. Switch the wrapper to the raw integer backing fields (SellingPrice \xD7 10^SellDecimals + SellDecimals, CostPrice \xD7 10^CostDecimals + CostDecimals) per the PRICE STORAGE NOTE, then retry." : "";
+  return [
+    `Product created successfully!`,
+    `**Code:** ${p.ProductItemId}`,
+    `**Description:** ${p.Description}`,
+    `**Sell:** ${sell} | **Cost:** ${cost} | **Margin:** ${margin}%`,
+    `**Supplier:** ${p.Manufacturer ?? "N/A"} | **Mfr Ref:** ${p.ManufacturerReference ?? "N/A"}`,
+    `**Category:** ${p.CategoryId ?? "N/A"}`,
+    `**CRM Link:** ${toCrmLink(created.RecordLink)}`,
+    warn
+  ].filter(Boolean).join("\n");
+}
+async function updateProduct(args) {
+  const client = getClient();
+  const { productItemId, ...fields } = args;
+  const body = {};
+  if (fields.description !== void 0) body.Description = fields.description;
+  if (fields.sellPrice !== void 0) body.DecimalSellingPrice = fields.sellPrice;
+  if (fields.costPrice !== void 0) body.DecimalCostPrice = fields.costPrice;
+  if (fields.manufacturer !== void 0) body.Manufacturer = fields.manufacturer;
+  if (fields.manufacturerReference !== void 0) body.ManufacturerReference = fields.manufacturerReference;
+  if (fields.categoryId !== void 0) body.CategoryId = fields.categoryId;
+  if (fields.unitDescription !== void 0) body.UnitDescription = fields.unitDescription;
+  if (fields.salesAnalysis !== void 0) body.SalesAnalysis = fields.salesAnalysis;
+  if (fields.extendedDescription !== void 0) body.ExtendedDescription = fields.extendedDescription;
+  if (fields.specification !== void 0) body.Specification = fields.specification;
+  if (fields.internalNotes !== void 0) body.InternalNotes = fields.internalNotes;
+  if (fields.obsolete !== void 0) body.Obsolete = fields.obsolete ? 1 : 0;
+  if (Object.keys(body).length === 0) return "No fields provided to update.";
+  await client.patch("ProductItems", `'${productItemId}'`, body);
+  return `Product '${productItemId}' updated. Fields changed: ${Object.keys(body).join(", ")}`;
+}
+
 // src/tools/opportunities.ts
 var searchOpportunitiesSchema = external_exports.object({
   description: external_exports.string().optional().describe("Search term to match against Description"),
@@ -29238,6 +29376,8 @@ var TOOL_PERMISSION_MAP = {
   unlink_enquiry_from_campaign: { module: "enquiries", action: "link_campaign" },
   assign_enquiry: { module: "enquiries", action: "assign" },
   create_inventory: { module: "inventory", action: "create" },
+  create_product: { module: "catalogue", action: "create" },
+  update_product: { module: "catalogue", action: "edit" },
   update_inventory: { module: "inventory", action: "edit" },
   save_quoting_lesson: { module: "knowledge", action: "create" },
   save_product_note: { module: "knowledge", action: "create" },
@@ -31111,6 +31251,32 @@ server.tool(
   async () => {
     try {
       const result = await getInventoryLookups();
+      return { content: [{ type: "text", text: result }] };
+    } catch (err) {
+      return { content: [{ type: "text", text: `Error: ${err.message}` }], isError: true };
+    }
+  }
+);
+registerWriteTool(
+  "create_product",
+  "Create a new product (ProductItem) in the catalogue. Use for bespoke / non-catalogue (NC) items before they go on a quote. Pass productItemId, or omit it with autoCode=true to auto-generate the next NC<DDMMYY><NN> code. Requires description, sellPrice, costPrice.",
+  createProductSchema.shape,
+  async (args) => {
+    try {
+      const result = await createProduct(createProductSchema.parse(args));
+      return { content: [{ type: "text", text: result }] };
+    } catch (err) {
+      return { content: [{ type: "text", text: `Error: ${err.message}` }], isError: true };
+    }
+  }
+);
+registerWriteTool(
+  "update_product",
+  "Update an existing product (ProductItem) \u2014 description, sell/cost price, supplier, references, obsolete flag.",
+  updateProductSchema.shape,
+  async (args) => {
+    try {
+      const result = await updateProduct(updateProductSchema.parse(args));
       return { content: [{ type: "text", text: result }] };
     } catch (err) {
       return { content: [{ type: "text", text: `Error: ${err.message}` }], isError: true };

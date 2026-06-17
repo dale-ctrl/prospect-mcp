@@ -2,7 +2,7 @@
   "users": {
     "DL": {
       "name": "Dale Liesching",
-      "writeAllow": "quotes,contacts,opportunities,tasks,problems,jobs,bookings,contracts,campaigns,enquiries,inventory,knowledge,notes,divisions",
+      "writeAllow": "quotes,contacts,opportunities,tasks,problems,jobs,bookings,contracts,campaigns,enquiries,inventory,knowledge,notes,divisions,catalogue",
       "permissions": {
         "quotes": {
           "create": true,
@@ -66,6 +66,10 @@
           "merge": true,
           "reparent": true,
           "update_address": true
+        },
+        "catalogue": {
+          "create": true,
+          "edit": true
         }
       },
       "notes": "Admin — full access + messaging opt-in for smoke testing"
@@ -215,6 +219,15 @@
         "merge",
         "reparent",
         "update_address"
+      ]
+    },
+    {
+      "id": "catalogue",
+      "label": "Product Catalogue",
+      "description": "Create and edit ProductItem catalogue records (including non-catalogue NC items)",
+      "actions": [
+        "create",
+        "edit"
       ]
     },
     {

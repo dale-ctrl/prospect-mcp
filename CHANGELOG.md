@@ -6,6 +6,20 @@ The format is based on Keep a Changelog, and this project adheres to Semantic Ve
 
 ## [Unreleased]
 
+## [1.21.0] - 2026-06-17
+### Added — `create_product` / `update_product` catalogue write tools
+
+Two new MCP write tools targeting the `ProductItems` OData entity set, so bespoke / non-catalogue (NC) items can be created from a Cowork session rather than the Prospect web UI before they're used on a quote.
+
+- **`create_product`** — POSTs a new `ProductItem`. Required: `description`, `sellPrice`, `costPrice`. Either pass `productItemId` verbatim, or pass `autoCode=true` (with `productItemId` omitted) to auto-generate the next `NC<DDMMYY><NN>` code by scanning today's existing NC entries. Guards against overwriting a duplicate SKU. Reads the persisted price back and warns inline if sell/cost rounded to £0.00 (signal that the server ignored the `Decimal*` POST and we need to fall back to raw integer backing fields per the note at the top of `products.ts`).
+- **`update_product`** — PATCHes an existing `ProductItem`. ProductItems uses a string key, so the wrapper targets `ProductItems('<code>')` (verified against the existing read-side tooling). Supports description, sell/cost, supplier, references, category, obsolete flag.
+- **Permissions**: new `catalogue` module added to `config/permissions.json` (`create` / `edit` actions). DL's `writeAllow` extended with `catalogue` and `"catalogue": { "create": true, "edit": true }` granted under DL's `permissions`. Per `src/permissions.ts`, permission changes are fetched live from GitHub on each restart, so teammates pick up the new module on next Claude Desktop restart without a plugin Update.
+- Reuses the existing `toCrmLink()` helper from `src/lib/urls.ts` so the response carries an absolute `crm.prospect365.com/view/...` link.
+
+Handler shipped from a Cowork session (`src/tools/products.ts`, 213 lines). Wired in per `INTEGRATION.md`: import alongside the catalogue.ts block, `TOOL_PERMISSION_MAP` entries next to `create_inventory`, two `registerWriteTool` calls in the "Final: Inventory Create/Update" neighbourhood.
+
+**Smoke test post-deploy**: `create_product(autoCode=true, description="TEST", sellPrice=10, costPrice=5)` → `get_product_detail` → expect sell £10 / cost £5. If they come back £0.00 the wrapper needs the raw-integer price-field switch (SellingPrice × 10^SellDecimals + SellDecimals, plus matching CostPrice / CostDecimals) per the `PRICE STORAGE NOTE` at the top of `products.ts`.
+
 ## [1.20.0] - 2026-06-10
 ### Added — generic DivisionXtra writer
 

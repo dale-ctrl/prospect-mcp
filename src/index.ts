@@ -105,6 +105,11 @@ import {
 } from "./tools/catalogue.js";
 
 import {
+  createProductSchema, createProduct,
+  updateProductSchema, updateProduct,
+} from "./tools/products.js";
+
+import {
   searchOpportunitiesSchema, searchOpportunities,
   getOpportunitySchema, getOpportunity,
   createOpportunitySchema, createOpportunity,
@@ -496,6 +501,8 @@ const TOOL_PERMISSION_MAP: Record<string, { module: string; action: string }> = 
   unlink_enquiry_from_campaign: { module: "enquiries", action: "link_campaign" },
   assign_enquiry: { module: "enquiries", action: "assign" },
   create_inventory: { module: "inventory", action: "create" },
+  create_product: { module: "catalogue", action: "create" },
+  update_product: { module: "catalogue", action: "edit" },
   update_inventory: { module: "inventory", action: "edit" },
   save_quoting_lesson: { module: "knowledge", action: "create" },
   save_product_note: { module: "knowledge", action: "create" },
@@ -2151,6 +2158,18 @@ registerWriteTool("update_inventory", "Update an inventory item — change descr
 
 server.tool("get_inventory_lookups", "List available inventory types and statuses.", getInventoryLookupsSchema.shape,
   async () => { try { const result = await getInventoryLookups(); return { content: [{ type: "text" as const, text: result }] }; } catch (err) { return { content: [{ type: "text" as const, text: `Error: ${(err as Error).message}` }], isError: true }; } });
+
+// ─── Catalogue: Product Create/Update ────────────────────────
+
+registerWriteTool("create_product",
+  "Create a new product (ProductItem) in the catalogue. Use for bespoke / non-catalogue (NC) items before they go on a quote. Pass productItemId, or omit it with autoCode=true to auto-generate the next NC<DDMMYY><NN> code. Requires description, sellPrice, costPrice.",
+  createProductSchema.shape,
+  async (args) => { try { const result = await createProduct(createProductSchema.parse(args)); return { content: [{ type: "text" as const, text: result }] }; } catch (err) { return { content: [{ type: "text" as const, text: `Error: ${(err as Error).message}` }], isError: true }; } });
+
+registerWriteTool("update_product",
+  "Update an existing product (ProductItem) — description, sell/cost price, supplier, references, obsolete flag.",
+  updateProductSchema.shape,
+  async (args) => { try { const result = await updateProduct(updateProductSchema.parse(args)); return { content: [{ type: "text" as const, text: result }] }; } catch (err) { return { content: [{ type: "text" as const, text: `Error: ${(err as Error).message}` }], isError: true }; } });
 
 // ─── Gap Fix: Division RFM & Profiling ───────────────────────
 
