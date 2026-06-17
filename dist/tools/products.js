@@ -8,18 +8,38 @@
  *
  * Entity set: ProductItems  (same set search_products / get_product_pricing read from).
  *
- * PRICE STORAGE NOTE (verify on first live deploy):
- *   The read-side selects DecimalSellingPrice / DecimalCostPrice and they round-trip fine on
- *   GET. add_quote_line POSTs DecimalPrice directly and the server honours it on POST (it is
- *   only PATCH on the Decimal* computed fields that gets clobbered — see the quote-line
- *   pitfalls). We therefore POST DecimalSellingPrice / DecimalCostPrice here. If a live test
- *   shows the created product comes back with £0.00 sell/cost, switch to the raw integer
- *   backing fields instead: SellingPrice (pounds × 10^SellDecimals) + SellDecimals, and the
- *   matching CostPrice / CostDecimals — mirroring the PriceLists pattern in pricing.ts.
+ * KEY + WRITE QUIRKS (confirmed via v1.22.0 smoke test against the live tenant):
+ *   1. ProductItem has a COMPOSITE primary key (OperatingCompanyCode + ProductItemId).
+ *      Other write-target entities have single-property surrogate keys; here we must
+ *      address rows as ProductItems(OperatingCompanyCode='A',ProductItemId='NC...')
+ *      for PATCH/GET-by-id, and include OperatingCompanyCode in every POST body.
+ *      Pre-v1.22.0, the POST omitted OperatingCompanyCode and the server returned
+ *      HTTP 500 "Unable to generate primary key for new record".
+ *   2. Prices are stored as integer-pounds × 10^decimals, not decimals. The
+ *      computed Decimal* fields (DecimalSellingPrice, DecimalCostPrice) have
+ *      meta:Computed="1" + meta:UpdateVisibility="never" — POST silently ignores
+ *      them. Send raw SellingPrice (e.g. 1000 for £10.00) + SellDecimals (e.g. 2),
+ *      same for CostPrice + CostDecimals. Mirrors the PriceLists read pattern in
+ *      pricing.ts (price / 10^decimals to display).
+ *   3. UpdateVisibility="never" governs PATCH, NOT POST. Fields like Description,
+ *      CategoryId, SellingPrice all have UpdateVisibility="never" but they ARE
+ *      writable on POST — that's how the row gets its initial values. Practical
+ *      consequence: sell / cost are CREATE-ONLY on this entity. update_product
+ *      can't change them via the API (the UI must use a different admin endpoint).
+ *   4. CategoryId is required on POST (server-side validation), even though
+ *      metadata marks it Nullable. WCG convention for NC items is CategoryId='STOCK'.
  */
 import { z } from "zod";
 import { getClient } from "../client.js";
 import { toCrmLink } from "../lib/urls.js";
+// WCG operating company — same as contacts.ts / quotes.ts. ProductItem's
+// primary key is composite (OperatingCompanyCode + ProductItemId), so the
+// POST body must include BOTH halves or the server returns HTTP 500
+// "Unable to generate primary key for new record". Other entity sets
+// (Contacts, Inventories, Quotes) have single-property surrogate keys so
+// they don't hit this — ProductItems was the only entity where the
+// missing field manifested as a 500.
+const OPERATING_COMPANY_CODE = "A";
 // ─── Helpers ──────────────────────────────────────────────────
 /** WCG non-catalogue code: NC + DDMMYY (today) + NN (zero-padded daily sequence). */
 function ncPrefixForToday(date = new Date()) {
@@ -66,7 +86,11 @@ export const createProductSchema = z.object({
         .string()
         .optional()
         .describe("Supplier's own product code / manufacturer reference, e.g. 'WESTCOUNTRY-31797'."),
-    categoryId: z.string().optional().describe("ProductCategory code — use get_product_categories to list."),
+    categoryId: z
+        .string()
+        .optional()
+        .default("STOCK")
+        .describe("ProductCategory code (the server requires one — defaults to 'STOCK' which matches every existing WCG NC item). Use get_product_categories to list alternatives."),
     unitDescription: z.string().optional().default("Each").describe("Unit of measure (default 'Each')."),
     salesAnalysis: z
         .string()
@@ -82,19 +106,22 @@ export const createProductSchema = z.object({
     obsolete: z.boolean().optional().default(false).describe("Mark obsolete on creation (default false)."),
 });
 export const updateProductSchema = z.object({
-    productItemId: z.string().describe("Product code / SKU (ProductItemId) to update."),
+    productItemId: z
+        .string()
+        .describe("Product code / SKU (ProductItemId) to update."),
+    // Note: sellPrice / costPrice / categoryId / SellingPrice et al. all have
+    // meta:UpdateVisibility="never" on this entity and the server rejects PATCHes
+    // that try to change them — they're create-only. Use create_product (or the
+    // Prospect UI) to set the price; this tool can only flip Obsolete and edit
+    // text fields. See quirk note (3) at the top of products.ts.
     description: z.string().optional(),
-    sellPrice: z.number().optional().describe("Unit sell price in £ (DecimalSellingPrice)."),
-    costPrice: z.number().optional().describe("Unit cost price in £ (DecimalCostPrice)."),
     manufacturer: z.string().optional(),
     manufacturerReference: z.string().optional(),
-    categoryId: z.string().optional(),
     unitDescription: z.string().optional(),
-    salesAnalysis: z.string().optional(),
     extendedDescription: z.string().optional(),
     specification: z.string().optional(),
     internalNotes: z.string().optional(),
-    obsolete: z.boolean().optional(),
+    obsolete: z.boolean().optional().describe("Mark obsolete / un-obsolete (PATCH-able)."),
 });
 // ─── Handlers ─────────────────────────────────────────────────
 export async function createProduct(args) {
@@ -112,13 +139,20 @@ export async function createProduct(args) {
     if (existing.value.length > 0) {
         return `Product '${code}' already exists. Pick a different code (or use autoCode=true to take the next free NC number), then retry.`;
     }
-    // 3. Build the body. Price via Decimal* (POST honours it — see PRICE STORAGE NOTE).
+    // 3. Build the body. Prices use raw integer fields, NOT Decimal* — see quirk
+    //    note (2) at the top of this file. £10.00 → SellingPrice=1000, SellDecimals=2.
     const margin = args.sellPrice > 0 ? (((args.sellPrice - args.costPrice) / args.sellPrice) * 100).toFixed(1) : "N/A";
+    const PRICE_DECIMALS = 2; // GBP — 2 dp (pence). Matches every existing WCG product.
+    const toRawPrice = (pounds) => Math.round(pounds * Math.pow(10, PRICE_DECIMALS));
     const body = {
+        OperatingCompanyCode: OPERATING_COMPANY_CODE,
         ProductItemId: code,
         Description: args.description,
-        DecimalSellingPrice: args.sellPrice,
-        DecimalCostPrice: args.costPrice,
+        CategoryId: args.categoryId, // schema defaults to "STOCK"; server requires it
+        SellingPrice: toRawPrice(args.sellPrice),
+        SellDecimals: PRICE_DECIMALS,
+        CostPrice: toRawPrice(args.costPrice),
+        CostDecimals: PRICE_DECIMALS,
         UnitDescription: args.unitDescription ?? "Each",
         Obsolete: args.obsolete ? 1 : 0,
     };
@@ -126,8 +160,6 @@ export async function createProduct(args) {
         body.Manufacturer = args.manufacturer;
     if (args.manufacturerReference !== undefined)
         body.ManufacturerReference = args.manufacturerReference;
-    if (args.categoryId !== undefined)
-        body.CategoryId = args.categoryId;
     if (args.salesAnalysis !== undefined)
         body.SalesAnalysis = args.salesAnalysis;
     if (args.extendedDescription !== undefined)
@@ -151,7 +183,7 @@ export async function createProduct(args) {
     const sell = typeof p.DecimalSellingPrice === "number" ? `£${p.DecimalSellingPrice.toFixed(2)}` : "N/A";
     const cost = typeof p.DecimalCostPrice === "number" ? `£${p.DecimalCostPrice.toFixed(2)}` : "N/A";
     const warn = sell === "£0.00" || cost === "£0.00"
-        ? "\n\n⚠️ Sell or cost persisted as £0.00 — the server likely ignored the Decimal* fields on POST. Switch the wrapper to the raw integer backing fields (SellingPrice × 10^SellDecimals + SellDecimals, CostPrice × 10^CostDecimals + CostDecimals) per the PRICE STORAGE NOTE, then retry."
+        ? "\n\n⚠️ Sell or cost persisted as £0.00. SellingPrice / SellDecimals (raw integer fields) were sent but the server did not honour them — check the live row and the PRICE quirk note at the top of products.ts."
         : "";
     return [
         `Product created successfully!`,
@@ -172,20 +204,12 @@ export async function updateProduct(args) {
     const body = {};
     if (fields.description !== undefined)
         body.Description = fields.description;
-    if (fields.sellPrice !== undefined)
-        body.DecimalSellingPrice = fields.sellPrice;
-    if (fields.costPrice !== undefined)
-        body.DecimalCostPrice = fields.costPrice;
     if (fields.manufacturer !== undefined)
         body.Manufacturer = fields.manufacturer;
     if (fields.manufacturerReference !== undefined)
         body.ManufacturerReference = fields.manufacturerReference;
-    if (fields.categoryId !== undefined)
-        body.CategoryId = fields.categoryId;
     if (fields.unitDescription !== undefined)
         body.UnitDescription = fields.unitDescription;
-    if (fields.salesAnalysis !== undefined)
-        body.SalesAnalysis = fields.salesAnalysis;
     if (fields.extendedDescription !== undefined)
         body.ExtendedDescription = fields.extendedDescription;
     if (fields.specification !== undefined)
@@ -196,8 +220,11 @@ export async function updateProduct(args) {
         body.Obsolete = fields.obsolete ? 1 : 0;
     if (Object.keys(body).length === 0)
         return "No fields provided to update.";
-    // ProductItems uses a string key — client.patch must target ProductItems('<code>').
-    await client.patch("ProductItems", `'${productItemId}'`, body);
+    // ProductItem has a COMPOSITE primary key (OperatingCompanyCode + ProductItemId).
+    // The single-string-key URL form /ProductItems('NC...') returns HTTP 500 — quirk
+    // note (1) in this file. Build the full key expression.
+    const keyExpr = `OperatingCompanyCode='${OPERATING_COMPANY_CODE}',ProductItemId='${productItemId}'`;
+    await client.patch("ProductItems", keyExpr, body);
     return `Product '${productItemId}' updated. Fields changed: ${Object.keys(body).join(", ")}`;
 }
 //# sourceMappingURL=products.js.map

@@ -14,10 +14,10 @@ export declare const getXtraFieldsSchema: z.ZodObject<{
     entityType: z.ZodEnum<["QuoteXtras", "ContactXtras", "DivisionXtras", "LeadXtras", "CampaignXtras", "BookingXtras", "ContractXtras", "QuoteLineXtras"]>;
     parentId: z.ZodUnion<[z.ZodNumber, z.ZodString]>;
 }, "strip", z.ZodTypeAny, {
-    entityType: "QuoteXtras" | "ContactXtras" | "DivisionXtras" | "LeadXtras" | "CampaignXtras" | "BookingXtras" | "ContractXtras" | "QuoteLineXtras";
+    entityType: "QuoteLineXtras" | "QuoteXtras" | "ContactXtras" | "DivisionXtras" | "LeadXtras" | "CampaignXtras" | "BookingXtras" | "ContractXtras";
     parentId: string | number;
 }, {
-    entityType: "QuoteXtras" | "ContactXtras" | "DivisionXtras" | "LeadXtras" | "CampaignXtras" | "BookingXtras" | "ContractXtras" | "QuoteLineXtras";
+    entityType: "QuoteLineXtras" | "QuoteXtras" | "ContactXtras" | "DivisionXtras" | "LeadXtras" | "CampaignXtras" | "BookingXtras" | "ContractXtras";
     parentId: string | number;
 }>;
 export declare const getContactProfilingSchema: z.ZodObject<{

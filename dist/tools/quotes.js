@@ -6,6 +6,52 @@ import { getClient } from "../client.js";
 import { toCrmLink } from "../lib/urls.js";
 const OPERATING_COMPANY_CODE = "A"; // Westcountry Group
 const QUOTE_DESCRIPTION_MAX = 250; // Quote.Description column cap
+// Copy a source QuoteLine's QuoteLineXtras row onto a newly-created line.
+// Line-level custom fields (Colour, Colour Extended, Supplier, Supplier Code,
+// etc.) live in QuoteLineXtras keyed by QuoteLineId. Pre-v1.22.0, duplicate_quote
+// created the new lines but never carried these across — so a copied quote came
+// out blank in every Colour / Supplier column. Mirrors update_quote_line_xtra's
+// PATCH-with-POST-on-404 upsert (quote-lines.ts) but for the whole Standard*Field*
+// slot set, no label translation needed (we're copying raw API values).
+// Returns the number of fields copied (0 if no Xtras row or all slots empty).
+async function copyQuoteLineXtras(client, sourceLineId, destLineId) {
+    const xtraRes = await client.get("QuoteLineXtras", `$filter=QuoteLineId eq ${sourceLineId}&$top=1`);
+    if (xtraRes.value.length === 0)
+        return 0;
+    const sourceRow = xtraRes.value[0];
+    const body = {};
+    for (const [key, value] of Object.entries(sourceRow)) {
+        // Match the tenant slot naming: StandardTextField1, StandardMemoField3,
+        // StandardDecimalField2, StandardDropdownField1, StandardDateField1,
+        // StandardFlagField1, etc. Skip null / empty-string so we don't blank
+        // out anything that might already be there from a default.
+        if (!/^Standard[A-Za-z]+Field\d+$/.test(key))
+            continue;
+        if (value === null || value === undefined)
+            continue;
+        if (typeof value === "string" && value === "")
+            continue;
+        body[key] = value;
+    }
+    if (Object.keys(body).length === 0)
+        return 0;
+    try {
+        await client.patch("QuoteLineXtras", destLineId, body);
+    }
+    catch (err) {
+        const msg = err.message || "";
+        if (/HTTP 404/.test(msg)) {
+            await client.post("QuoteLineXtras", {
+                QuoteLineId: destLineId,
+                ...body,
+            });
+        }
+        else {
+            throw err;
+        }
+    }
+    return Object.keys(body).length;
+}
 // When a quote is linked to an opportunity, WCG policy is that the quote
 // description must mirror the opportunity description so the two stay in sync
 // across the pipeline. Returns null when the lead has no description on file
@@ -414,9 +460,16 @@ export async function updateQuote(args) {
 }
 export async function duplicateQuote(args) {
     const client = getClient();
-    // Step 1: Fetch the original quote with all lines
+    // Step 1: Fetch the original quote with all lines.
+    // Include StatusFlag so we can filter out soft-deleted lines (this tenant's
+    // delete is a flag set to 'D' rather than a hard row removal — the line
+    // stays returned by /QuoteLines but is excluded from header totals). Pre-
+    // v1.22.0 duplicate_quote copied ALL returned lines including the deleted
+    // ones, which inflated copies (one observed case: £9,330.48 → £17,872).
+    // Include LineId so we can look up each line's QuoteLineXtras row for the
+    // line-level custom-field copy (Bug 3 in v1.22.0).
     const expand = [
-        "QuoteLines($select=ProductItemId,Description,ExtendedDescription,DecimalPrice,DecimalCostPrice,DecimalDiscountPercentage,Sequence,TaxCode,GroupId,Quantity,QuantityDecimals;$orderby=Sequence)",
+        "QuoteLines($select=LineId,ProductItemId,Description,ExtendedDescription,DecimalPrice,DecimalCostPrice,DecimalDiscountPercentage,Sequence,TaxCode,GroupId,Quantity,QuantityDecimals,StatusFlag;$orderby=Sequence)",
     ].join(",");
     const original = await client.getById("Quotes", args.quoteId, `$expand=${expand}`);
     // WCG rule: when the original quote is linked to an opportunity, the
@@ -468,10 +521,24 @@ export async function duplicateQuote(args) {
         newHeader.DeliveryCountry = original.DeliveryCountry;
     const newQuote = await client.post("Quotes", newHeader);
     const newQuoteId = newQuote.QuoteId;
-    // Step 3: Copy all lines to the new quote
+    // Step 3: Copy all active lines to the new quote.
     let linesCopied = 0;
+    let linesSkippedDeleted = 0;
+    let xtrasCopied = 0;
+    let xtrasFailed = 0;
     const lines = original.QuoteLines || [];
     for (const line of lines) {
+        const lineAny = line;
+        // Bug 2 fix (v1.22.0): skip soft-deleted source lines. The Prospect-wide
+        // soft-delete convention is StatusFlag = 'D' (active is 'A'); deleted lines
+        // still come back from /QuoteLines via $expand but the UI excludes them
+        // from the header total. Pre-v1.22.0, duplicate_quote resurrected them as
+        // active on the copy (one observed case: £9,330.48 → £17,872 when 12 dead
+        // lines came back).
+        if (typeof lineAny.StatusFlag === "string" && lineAny.StatusFlag === "D") {
+            linesSkippedDeleted++;
+            continue;
+        }
         const lineBody = {
             QuoteId: newQuoteId,
             Description: line.Description,
@@ -491,13 +558,32 @@ export async function duplicateQuote(args) {
         if (line.TaxCode)
             lineBody.TaxCode = line.TaxCode;
         // Copy quantity using raw integer fields
-        const lineAny = line;
         if (lineAny.Quantity != null) {
             lineBody.Quantity = lineAny.Quantity;
             lineBody.QuantityDecimals = lineAny.QuantityDecimals ?? 0;
         }
-        await client.post("QuoteLines", lineBody);
+        const createdLine = await client.post("QuoteLines", lineBody);
         linesCopied++;
+        // Bug 3 fix (v1.22.0): copy each source line's QuoteLineXtras (Colour,
+        // Colour Extended, Supplier, Supplier Code, etc.) onto the new line.
+        // Tolerate per-line failures — the rest of the quote is still useful even
+        // if one Xtras row didn't round-trip; user can re-enter custom fields by
+        // hand for any line we couldn't carry.
+        const sourceLineId = typeof lineAny.LineId === "number" ? lineAny.LineId : null;
+        const newLineId = typeof createdLine.LineId === "number"
+            ? createdLine.LineId
+            : null;
+        if (sourceLineId != null && newLineId != null) {
+            try {
+                const copied = await copyQuoteLineXtras(client, sourceLineId, newLineId);
+                if (copied > 0)
+                    xtrasCopied++;
+            }
+            catch (err) {
+                xtrasFailed++;
+                console.error(`[duplicate_quote] Xtras copy failed for new line ${newLineId} (source ${sourceLineId}):`, err.message);
+            }
+        }
     }
     const descriptionNote = descriptionSource === "opportunity"
         ? " (copied from linked opportunity)"
@@ -506,12 +592,19 @@ export async function duplicateQuote(args) {
             : original.LeadId != null && descriptionSource === "copy-prefix"
                 ? " (linked opportunity has no description — fell back to COPY prefix)"
                 : "";
+    const linesLine = linesSkippedDeleted > 0
+        ? `**Lines copied:** ${linesCopied} (skipped ${linesSkippedDeleted} soft-deleted source line${linesSkippedDeleted === 1 ? "" : "s"})`
+        : `**Lines copied:** ${linesCopied}`;
+    const xtrasLine = xtrasCopied > 0 || xtrasFailed > 0
+        ? `**Line custom fields (Colour/Supplier/etc.) copied:** ${xtrasCopied} line${xtrasCopied === 1 ? "" : "s"}${xtrasFailed > 0 ? ` (${xtrasFailed} failed — see server log)` : ""}`
+        : "";
     return [
         `Quote duplicated successfully!`,
         `**Original:** Quote #${args.quoteId} — ${original.Description || "(no description)"}`,
         `**New QuoteId:** ${newQuoteId}`,
         `**Description:** ${newQuote.Description}${descriptionNote}`,
-        `**Lines copied:** ${linesCopied}`,
+        linesLine,
+        xtrasLine,
         `**Contact:** ${newQuote.ContactId}`,
         original.LeadId != null ? `**Linked opportunity:** Lead #${original.LeadId} (carried from original)` : "",
         `**CRM Link:** ${toCrmLink(newQuote.RecordLink)}`,

@@ -8,14 +8,26 @@
  *
  * Entity set: ProductItems  (same set search_products / get_product_pricing read from).
  *
- * PRICE STORAGE NOTE (verify on first live deploy):
- *   The read-side selects DecimalSellingPrice / DecimalCostPrice and they round-trip fine on
- *   GET. add_quote_line POSTs DecimalPrice directly and the server honours it on POST (it is
- *   only PATCH on the Decimal* computed fields that gets clobbered — see the quote-line
- *   pitfalls). We therefore POST DecimalSellingPrice / DecimalCostPrice here. If a live test
- *   shows the created product comes back with £0.00 sell/cost, switch to the raw integer
- *   backing fields instead: SellingPrice (pounds × 10^SellDecimals) + SellDecimals, and the
- *   matching CostPrice / CostDecimals — mirroring the PriceLists pattern in pricing.ts.
+ * KEY + WRITE QUIRKS (confirmed via v1.22.0 smoke test against the live tenant):
+ *   1. ProductItem has a COMPOSITE primary key (OperatingCompanyCode + ProductItemId).
+ *      Other write-target entities have single-property surrogate keys; here we must
+ *      address rows as ProductItems(OperatingCompanyCode='A',ProductItemId='NC...')
+ *      for PATCH/GET-by-id, and include OperatingCompanyCode in every POST body.
+ *      Pre-v1.22.0, the POST omitted OperatingCompanyCode and the server returned
+ *      HTTP 500 "Unable to generate primary key for new record".
+ *   2. Prices are stored as integer-pounds × 10^decimals, not decimals. The
+ *      computed Decimal* fields (DecimalSellingPrice, DecimalCostPrice) have
+ *      meta:Computed="1" + meta:UpdateVisibility="never" — POST silently ignores
+ *      them. Send raw SellingPrice (e.g. 1000 for £10.00) + SellDecimals (e.g. 2),
+ *      same for CostPrice + CostDecimals. Mirrors the PriceLists read pattern in
+ *      pricing.ts (price / 10^decimals to display).
+ *   3. UpdateVisibility="never" governs PATCH, NOT POST. Fields like Description,
+ *      CategoryId, SellingPrice all have UpdateVisibility="never" but they ARE
+ *      writable on POST — that's how the row gets its initial values. Practical
+ *      consequence: sell / cost are CREATE-ONLY on this entity. update_product
+ *      can't change them via the API (the UI must use a different admin endpoint).
+ *   4. CategoryId is required on POST (server-side validation), even though
+ *      metadata marks it Nullable. WCG convention for NC items is CategoryId='STOCK'.
  */
 import { z } from "zod";
 export declare const createProductSchema: z.ZodObject<{
@@ -26,7 +38,7 @@ export declare const createProductSchema: z.ZodObject<{
     costPrice: z.ZodNumber;
     manufacturer: z.ZodOptional<z.ZodString>;
     manufacturerReference: z.ZodOptional<z.ZodString>;
-    categoryId: z.ZodOptional<z.ZodString>;
+    categoryId: z.ZodDefault<z.ZodOptional<z.ZodString>>;
     unitDescription: z.ZodDefault<z.ZodOptional<z.ZodString>>;
     salesAnalysis: z.ZodOptional<z.ZodString>;
     extendedDescription: z.ZodOptional<z.ZodString>;
@@ -40,6 +52,7 @@ export declare const createProductSchema: z.ZodObject<{
 }, "strip", z.ZodTypeAny, {
     description: string;
     costPrice: number;
+    categoryId: string;
     autoCode: boolean;
     sellPrice: number;
     unitDescription: string;
@@ -47,7 +60,6 @@ export declare const createProductSchema: z.ZodObject<{
     productItemId?: string | undefined;
     taxCode?: string | undefined;
     extendedDescription?: string | undefined;
-    categoryId?: string | undefined;
     manufacturerReference?: string | undefined;
     manufacturer?: string | undefined;
     salesAnalysis?: string | undefined;
@@ -79,13 +91,9 @@ export declare const createProductSchema: z.ZodObject<{
 export declare const updateProductSchema: z.ZodObject<{
     productItemId: z.ZodString;
     description: z.ZodOptional<z.ZodString>;
-    sellPrice: z.ZodOptional<z.ZodNumber>;
-    costPrice: z.ZodOptional<z.ZodNumber>;
     manufacturer: z.ZodOptional<z.ZodString>;
     manufacturerReference: z.ZodOptional<z.ZodString>;
-    categoryId: z.ZodOptional<z.ZodString>;
     unitDescription: z.ZodOptional<z.ZodString>;
-    salesAnalysis: z.ZodOptional<z.ZodString>;
     extendedDescription: z.ZodOptional<z.ZodString>;
     specification: z.ZodOptional<z.ZodString>;
     internalNotes: z.ZodOptional<z.ZodString>;
@@ -93,28 +101,20 @@ export declare const updateProductSchema: z.ZodObject<{
 }, "strip", z.ZodTypeAny, {
     productItemId: string;
     description?: string | undefined;
-    costPrice?: number | undefined;
     extendedDescription?: string | undefined;
-    categoryId?: string | undefined;
     manufacturerReference?: string | undefined;
-    sellPrice?: number | undefined;
     manufacturer?: string | undefined;
     unitDescription?: string | undefined;
-    salesAnalysis?: string | undefined;
     specification?: string | undefined;
     internalNotes?: string | undefined;
     obsolete?: boolean | undefined;
 }, {
     productItemId: string;
     description?: string | undefined;
-    costPrice?: number | undefined;
     extendedDescription?: string | undefined;
-    categoryId?: string | undefined;
     manufacturerReference?: string | undefined;
-    sellPrice?: number | undefined;
     manufacturer?: string | undefined;
     unitDescription?: string | undefined;
-    salesAnalysis?: string | undefined;
     specification?: string | undefined;
     internalNotes?: string | undefined;
     obsolete?: boolean | undefined;

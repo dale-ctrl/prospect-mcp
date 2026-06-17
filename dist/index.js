@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// prospect-crm-mcp v1.21.0 — bundled by esbuild on 2026-06-17T14:35:18.349Z
+// prospect-crm-mcp v1.22.0 — bundled by esbuild on 2026-06-17T15:50:36.412Z
 // Single-file MCP server; no node_modules required at runtime.
 var __create = Object.create;
 var __defProp = Object.defineProperty;
@@ -21321,6 +21321,36 @@ function toCrmLink(recordLink) {
 // src/tools/quotes.ts
 var OPERATING_COMPANY_CODE = "A";
 var QUOTE_DESCRIPTION_MAX = 250;
+async function copyQuoteLineXtras(client, sourceLineId, destLineId) {
+  const xtraRes = await client.get(
+    "QuoteLineXtras",
+    `$filter=QuoteLineId eq ${sourceLineId}&$top=1`
+  );
+  if (xtraRes.value.length === 0) return 0;
+  const sourceRow = xtraRes.value[0];
+  const body = {};
+  for (const [key, value] of Object.entries(sourceRow)) {
+    if (!/^Standard[A-Za-z]+Field\d+$/.test(key)) continue;
+    if (value === null || value === void 0) continue;
+    if (typeof value === "string" && value === "") continue;
+    body[key] = value;
+  }
+  if (Object.keys(body).length === 0) return 0;
+  try {
+    await client.patch("QuoteLineXtras", destLineId, body);
+  } catch (err) {
+    const msg = err.message || "";
+    if (/HTTP 404/.test(msg)) {
+      await client.post("QuoteLineXtras", {
+        QuoteLineId: destLineId,
+        ...body
+      });
+    } else {
+      throw err;
+    }
+  }
+  return Object.keys(body).length;
+}
 async function fetchOpportunityDescription(leadId) {
   const client = getClient();
   const lead = await client.getById("Leads", leadId, "$select=Description");
@@ -21645,7 +21675,7 @@ ${noteParts.join(" ")}` : "";
 async function duplicateQuote(args) {
   const client = getClient();
   const expand = [
-    "QuoteLines($select=ProductItemId,Description,ExtendedDescription,DecimalPrice,DecimalCostPrice,DecimalDiscountPercentage,Sequence,TaxCode,GroupId,Quantity,QuantityDecimals;$orderby=Sequence)"
+    "QuoteLines($select=LineId,ProductItemId,Description,ExtendedDescription,DecimalPrice,DecimalCostPrice,DecimalDiscountPercentage,Sequence,TaxCode,GroupId,Quantity,QuantityDecimals,StatusFlag;$orderby=Sequence)"
   ].join(",");
   const original = await client.getById("Quotes", args.quoteId, `$expand=${expand}`);
   let resolvedDescription = args.newDescription;
@@ -21681,8 +21711,16 @@ async function duplicateQuote(args) {
   const newQuote = await client.post("Quotes", newHeader);
   const newQuoteId = newQuote.QuoteId;
   let linesCopied = 0;
+  let linesSkippedDeleted = 0;
+  let xtrasCopied = 0;
+  let xtrasFailed = 0;
   const lines = original.QuoteLines || [];
   for (const line of lines) {
+    const lineAny = line;
+    if (typeof lineAny.StatusFlag === "string" && lineAny.StatusFlag === "D") {
+      linesSkippedDeleted++;
+      continue;
+    }
     const lineBody = {
       QuoteId: newQuoteId,
       Description: line.Description
@@ -21694,21 +21732,37 @@ async function duplicateQuote(args) {
     if (line.DecimalDiscountPercentage != null) lineBody.DecimalDiscountPercentage = line.DecimalDiscountPercentage;
     if (line.Sequence != null) lineBody.Sequence = line.Sequence;
     if (line.TaxCode) lineBody.TaxCode = line.TaxCode;
-    const lineAny = line;
     if (lineAny.Quantity != null) {
       lineBody.Quantity = lineAny.Quantity;
       lineBody.QuantityDecimals = lineAny.QuantityDecimals ?? 0;
     }
-    await client.post("QuoteLines", lineBody);
+    const createdLine = await client.post("QuoteLines", lineBody);
     linesCopied++;
+    const sourceLineId = typeof lineAny.LineId === "number" ? lineAny.LineId : null;
+    const newLineId = typeof createdLine.LineId === "number" ? createdLine.LineId : null;
+    if (sourceLineId != null && newLineId != null) {
+      try {
+        const copied = await copyQuoteLineXtras(client, sourceLineId, newLineId);
+        if (copied > 0) xtrasCopied++;
+      } catch (err) {
+        xtrasFailed++;
+        console.error(
+          `[duplicate_quote] Xtras copy failed for new line ${newLineId} (source ${sourceLineId}):`,
+          err.message
+        );
+      }
+    }
   }
   const descriptionNote = descriptionSource === "opportunity" ? " (copied from linked opportunity)" : original.LeadId != null && descriptionSource === "argument" ? " (linked opportunity has no description \u2014 used `newDescription` arg as fallback)" : original.LeadId != null && descriptionSource === "copy-prefix" ? " (linked opportunity has no description \u2014 fell back to COPY prefix)" : "";
+  const linesLine = linesSkippedDeleted > 0 ? `**Lines copied:** ${linesCopied} (skipped ${linesSkippedDeleted} soft-deleted source line${linesSkippedDeleted === 1 ? "" : "s"})` : `**Lines copied:** ${linesCopied}`;
+  const xtrasLine = xtrasCopied > 0 || xtrasFailed > 0 ? `**Line custom fields (Colour/Supplier/etc.) copied:** ${xtrasCopied} line${xtrasCopied === 1 ? "" : "s"}${xtrasFailed > 0 ? ` (${xtrasFailed} failed \u2014 see server log)` : ""}` : "";
   return [
     `Quote duplicated successfully!`,
     `**Original:** Quote #${args.quoteId} \u2014 ${original.Description || "(no description)"}`,
     `**New QuoteId:** ${newQuoteId}`,
     `**Description:** ${newQuote.Description}${descriptionNote}`,
-    `**Lines copied:** ${linesCopied}`,
+    linesLine,
+    xtrasLine,
     `**Contact:** ${newQuote.ContactId}`,
     original.LeadId != null ? `**Linked opportunity:** Lead #${original.LeadId} (carried from original)` : "",
     `**CRM Link:** ${toCrmLink(newQuote.RecordLink)}`
@@ -24589,6 +24643,7 @@ async function getInventoryLookups() {
 }
 
 // src/tools/products.ts
+var OPERATING_COMPANY_CODE3 = "A";
 function ncPrefixForToday(date3 = /* @__PURE__ */ new Date()) {
   const dd = String(date3.getDate()).padStart(2, "0");
   const mm = String(date3.getMonth() + 1).padStart(2, "0");
@@ -24622,7 +24677,9 @@ var createProductSchema = external_exports.object({
   costPrice: external_exports.number().describe("Unit cost price in \xA3 (DecimalCostPrice)."),
   manufacturer: external_exports.string().optional().describe("Supplier / manufacturer name, e.g. 'Hawk Furniture Ltd'."),
   manufacturerReference: external_exports.string().optional().describe("Supplier's own product code / manufacturer reference, e.g. 'WESTCOUNTRY-31797'."),
-  categoryId: external_exports.string().optional().describe("ProductCategory code \u2014 use get_product_categories to list."),
+  categoryId: external_exports.string().optional().default("STOCK").describe(
+    "ProductCategory code (the server requires one \u2014 defaults to 'STOCK' which matches every existing WCG NC item). Use get_product_categories to list alternatives."
+  ),
   unitDescription: external_exports.string().optional().default("Each").describe("Unit of measure (default 'Each')."),
   salesAnalysis: external_exports.string().optional().describe("Access Dimensions sales nominal string, e.g. '10-1-4000-000'. Match a comparable catalogue item if unsure."),
   extendedDescription: external_exports.string().optional().describe("Long-form description / spec (the product blurb shown on quotes)."),
@@ -24636,18 +24693,19 @@ var createProductSchema = external_exports.object({
 });
 var updateProductSchema = external_exports.object({
   productItemId: external_exports.string().describe("Product code / SKU (ProductItemId) to update."),
+  // Note: sellPrice / costPrice / categoryId / SellingPrice et al. all have
+  // meta:UpdateVisibility="never" on this entity and the server rejects PATCHes
+  // that try to change them — they're create-only. Use create_product (or the
+  // Prospect UI) to set the price; this tool can only flip Obsolete and edit
+  // text fields. See quirk note (3) at the top of products.ts.
   description: external_exports.string().optional(),
-  sellPrice: external_exports.number().optional().describe("Unit sell price in \xA3 (DecimalSellingPrice)."),
-  costPrice: external_exports.number().optional().describe("Unit cost price in \xA3 (DecimalCostPrice)."),
   manufacturer: external_exports.string().optional(),
   manufacturerReference: external_exports.string().optional(),
-  categoryId: external_exports.string().optional(),
   unitDescription: external_exports.string().optional(),
-  salesAnalysis: external_exports.string().optional(),
   extendedDescription: external_exports.string().optional(),
   specification: external_exports.string().optional(),
   internalNotes: external_exports.string().optional(),
-  obsolete: external_exports.boolean().optional()
+  obsolete: external_exports.boolean().optional().describe("Mark obsolete / un-obsolete (PATCH-able).")
 });
 async function createProduct(args) {
   const client = getClient();
@@ -24666,17 +24724,23 @@ async function createProduct(args) {
     return `Product '${code}' already exists. Pick a different code (or use autoCode=true to take the next free NC number), then retry.`;
   }
   const margin = args.sellPrice > 0 ? ((args.sellPrice - args.costPrice) / args.sellPrice * 100).toFixed(1) : "N/A";
+  const PRICE_DECIMALS = 2;
+  const toRawPrice = (pounds) => Math.round(pounds * Math.pow(10, PRICE_DECIMALS));
   const body = {
+    OperatingCompanyCode: OPERATING_COMPANY_CODE3,
     ProductItemId: code,
     Description: args.description,
-    DecimalSellingPrice: args.sellPrice,
-    DecimalCostPrice: args.costPrice,
+    CategoryId: args.categoryId,
+    // schema defaults to "STOCK"; server requires it
+    SellingPrice: toRawPrice(args.sellPrice),
+    SellDecimals: PRICE_DECIMALS,
+    CostPrice: toRawPrice(args.costPrice),
+    CostDecimals: PRICE_DECIMALS,
     UnitDescription: args.unitDescription ?? "Each",
     Obsolete: args.obsolete ? 1 : 0
   };
   if (args.manufacturer !== void 0) body.Manufacturer = args.manufacturer;
   if (args.manufacturerReference !== void 0) body.ManufacturerReference = args.manufacturerReference;
-  if (args.categoryId !== void 0) body.CategoryId = args.categoryId;
   if (args.salesAnalysis !== void 0) body.SalesAnalysis = args.salesAnalysis;
   if (args.extendedDescription !== void 0) body.ExtendedDescription = args.extendedDescription;
   if (args.specification !== void 0) body.Specification = args.specification;
@@ -24693,7 +24757,7 @@ async function createProduct(args) {
   const p = check2.value[0] ?? created;
   const sell = typeof p.DecimalSellingPrice === "number" ? `\xA3${p.DecimalSellingPrice.toFixed(2)}` : "N/A";
   const cost = typeof p.DecimalCostPrice === "number" ? `\xA3${p.DecimalCostPrice.toFixed(2)}` : "N/A";
-  const warn = sell === "\xA30.00" || cost === "\xA30.00" ? "\n\n\u26A0\uFE0F Sell or cost persisted as \xA30.00 \u2014 the server likely ignored the Decimal* fields on POST. Switch the wrapper to the raw integer backing fields (SellingPrice \xD7 10^SellDecimals + SellDecimals, CostPrice \xD7 10^CostDecimals + CostDecimals) per the PRICE STORAGE NOTE, then retry." : "";
+  const warn = sell === "\xA30.00" || cost === "\xA30.00" ? "\n\n\u26A0\uFE0F Sell or cost persisted as \xA30.00. SellingPrice / SellDecimals (raw integer fields) were sent but the server did not honour them \u2014 check the live row and the PRICE quirk note at the top of products.ts." : "";
   return [
     `Product created successfully!`,
     `**Code:** ${p.ProductItemId}`,
@@ -24710,19 +24774,16 @@ async function updateProduct(args) {
   const { productItemId, ...fields } = args;
   const body = {};
   if (fields.description !== void 0) body.Description = fields.description;
-  if (fields.sellPrice !== void 0) body.DecimalSellingPrice = fields.sellPrice;
-  if (fields.costPrice !== void 0) body.DecimalCostPrice = fields.costPrice;
   if (fields.manufacturer !== void 0) body.Manufacturer = fields.manufacturer;
   if (fields.manufacturerReference !== void 0) body.ManufacturerReference = fields.manufacturerReference;
-  if (fields.categoryId !== void 0) body.CategoryId = fields.categoryId;
   if (fields.unitDescription !== void 0) body.UnitDescription = fields.unitDescription;
-  if (fields.salesAnalysis !== void 0) body.SalesAnalysis = fields.salesAnalysis;
   if (fields.extendedDescription !== void 0) body.ExtendedDescription = fields.extendedDescription;
   if (fields.specification !== void 0) body.Specification = fields.specification;
   if (fields.internalNotes !== void 0) body.InternalNotes = fields.internalNotes;
   if (fields.obsolete !== void 0) body.Obsolete = fields.obsolete ? 1 : 0;
   if (Object.keys(body).length === 0) return "No fields provided to update.";
-  await client.patch("ProductItems", `'${productItemId}'`, body);
+  const keyExpr = `OperatingCompanyCode='${OPERATING_COMPANY_CODE3}',ProductItemId='${productItemId}'`;
+  await client.patch("ProductItems", keyExpr, body);
   return `Product '${productItemId}' updated. Fields changed: ${Object.keys(body).join(", ")}`;
 }
 

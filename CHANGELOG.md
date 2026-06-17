@@ -6,6 +6,20 @@ The format is based on Keep a Changelog, and this project adheres to Semantic Ve
 
 ## [Unreleased]
 
+## [1.22.0] - 2026-06-17
+### Fixed — three bugs from the v1.21.0 live quoting session
+
+Hot-on-the-heels release after v1.21.0 shipped this morning, addressing three issues Dale hit on the same day during real quote work.
+
+- **`create_product` HTTP 500 "Unable to generate primary key for new record"**. `ProductItem` has a *composite* primary key (`OperatingCompanyCode` + `ProductItemId`) — the only write-target entity where this is true. The v1.21.0 POST body included only `ProductItemId`, so the server couldn't address the row. Body now includes `OperatingCompanyCode: "A"` (WCG operating company, same constant the contacts / quotes modules use). Bonus follow-ons caught by the controlled smoke test:
+  - **Prices were silently saved as £0.00.** The `DecimalSellingPrice` / `DecimalCostPrice` fields have `meta:Computed="1"` + `meta:UpdateVisibility="never"` — the server ignores them on POST. Now sending the raw integer backing fields (`SellingPrice` = pounds × 10², `SellDecimals` = 2; same for `CostPrice` / `CostDecimals`). Smoke test confirmed £10.00 / £5.00 round-trip exactly.
+  - **`CategoryId` is required on POST** despite metadata marking it `Nullable`. Schema now defaults to `"STOCK"`, matching every existing WCG NC item.
+  - **`update_product` PATCH returned HTTP 500.** Composite-key URL needed — was `ProductItems('NC...')`, now `ProductItems(OperatingCompanyCode='A',ProductItemId='NC...')`. Also dropped `sellPrice` / `costPrice` / `categoryId` from `updateProductSchema` — those fields are create-only (`UpdateVisibility="never"`), the server rejects PATCHes that include them.
+- **`duplicate_quote` resurrected soft-deleted source lines**. One observed case doubled a copied quote from £9,330.48 → £17,872 when 12 dead lines came back as active. Prospect's soft-delete convention is `StatusFlag = 'D'` (active is `'A'`); the deleted lines still come back through `$expand=QuoteLines` but the UI excludes them from header totals. Added `StatusFlag` to the source-line `$select` and skip the loop when it's `'D'`. The return blurb now also reports the skipped count when non-zero.
+- **`duplicate_quote` dropped per-line custom fields (Colour, Colour Extended, Supplier, Supplier Code, …)**. These live in `QuoteLineXtras` keyed by `QuoteLineId`. v1.21.0 created the new lines but never carried their Xtras over. Now after each new line POSTs, the handler GETs the source line's `QuoteLineXtras` row, plucks the `Standard*Field*` slots (ignoring nulls / empty strings), and PATCH-with-POST-on-404-fallback writes them onto the new `LineId` (mirroring `upsertQuoteLineXtra` in `quote-lines.ts`). Per-line failures don't abort the whole duplicate — they're logged and surfaced in the response footer.
+
+Documented every quirk found by the smoke test (composite PK, computed Decimal* fields, POST-vs-PATCH semantics of `UpdateVisibility="never"`, required `CategoryId`) in the docstring at the top of `src/tools/products.ts` so the next maintainer doesn't have to rediscover them. Existing `INTEGRATION.md` smoke-test note is still valid.
+
 ## [1.21.0] - 2026-06-17
 ### Added — `create_product` / `update_product` catalogue write tools
 
