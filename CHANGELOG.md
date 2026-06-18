@@ -6,6 +6,24 @@ The format is based on Keep a Changelog, and this project adheres to Semantic Ve
 
 ## [Unreleased]
 
+## [1.23.0] - 2026-06-17
+### Changed — `get_quote` line rendering: explicit Sequence, soft-deleted lines split out
+
+Pre-v1.23.0, `get_quote` listed quote lines in creation/LineId order and never showed each line's `Sequence` (the per-line display-order column the printed quote and Prospect UI sort by). That made it impossible to tell from the response what order the lines will actually print in — and on one live quote the model guessed sequence numbers and left a delivery line mid-quote when inserting new items.
+
+This release rewires the line section without touching totals or margin logic:
+
+- **Active lines sorted by `Sequence`** ascending, with `null` sequences pushed to the end and `LineId` as the tiebreak so the rendered order matches the printed quote / UI exactly. (`$orderby=Sequence` alone leaves null ordering server-defined, hence the client-side sort.)
+- **Each rendered line now shows its sequence value** as `**[Seq 10] NCAR10062602** — Premium Senior Tray Tables …` — visible upfront, no longer buried. Lines with no sequence render as `[Seq —]`.
+- **Soft-deleted lines split into their own section.** Prospect's tenant-wide soft-delete convention is `StatusFlag = 'D'`; those rows still come back from `$expand=QuoteLines` but the UI excludes them from header totals. Previously they were listed inline alongside active lines, which was misleading and contributed to the wrong-sequence incident. They now render under `## Soft-deleted lines (N, excluded from totals)` with a count, after the active list, never mixed in.
+- **`StatusFlag` added** to the `QuoteLines` `$select` so the split actually works.
+- **Header counter updated** to `## Lines (3 active, 2 soft-deleted) — sorted by Sequence (printed-quote display order)`.
+- **`get_quote` tool description updated** to spell out the new ordering and soft-delete handling, so the model picks correct sequence numbers when inserting / reordering.
+
+Totals (Net / Gross / Cost / Margin) unchanged — soft-deleted lines were already excluded by the server-computed header values; this release only changes presentation.
+
+Verified live against quote 15782 (Cornerstone Academy / Monkerton classroom furniture): three active lines render at Seq 10/20/30 in order, two soft-deleted NCAR10062603 lines appear in their own section, header totals unchanged at £700.00 Net / £840.00 Gross / £580.90 Cost.
+
 ## [1.22.0] - 2026-06-17
 ### Fixed — three bugs from the v1.21.0 live quoting session
 

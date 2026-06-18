@@ -654,7 +654,7 @@ server.tool(
 
 server.tool(
   "get_quote",
-  "Get full details of a quote including all line items, contact, company, status, totals, and margin. Use this to review a quote before making changes.",
+  "Get full details of a quote including all line items, contact, company, status, totals, and margin. Lines are listed in printed-quote display order (sorted by `Sequence` ascending, with null sequences last and LineId as tiebreak) and each row shows its `Seq` value — use that to pick correct sequence numbers when inserting or reordering. Soft-deleted lines (StatusFlag='D', excluded from header totals) are reported in their own section below the active lines, never mixed in. Use this to review a quote before making changes.",
   getQuoteSchema.shape,
   async (args) => {
     try {

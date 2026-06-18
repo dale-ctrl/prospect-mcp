@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// prospect-crm-mcp v1.22.0 — bundled by esbuild on 2026-06-17T15:50:36.412Z
+// prospect-crm-mcp v1.23.0 — bundled by esbuild on 2026-06-18T12:23:08.979Z
 // Single-file MCP server; no node_modules required at runtime.
 var __create = Object.create;
 var __defProp = Object.defineProperty;
@@ -21504,13 +21504,32 @@ ${lines.join("\n\n")}`;
 async function getQuote(args) {
   const client = getClient();
   const expand = [
-    "QuoteLines($select=LineId,ProductItemId,Description,DecimalQuantity,DecimalPrice,DecimalDiscountPercentage,DecimalNetValue,DecimalGrossValue,DecimalCostPrice,DecimalCostValue,MarginPercentage,Sequence,TaxCode;$orderby=Sequence)",
+    "QuoteLines($select=LineId,ProductItemId,Description,DecimalQuantity,DecimalPrice,DecimalDiscountPercentage,DecimalNetValue,DecimalGrossValue,DecimalCostPrice,DecimalCostValue,MarginPercentage,Sequence,TaxCode,StatusFlag;$orderby=Sequence)",
     "Contact($select=ContactId,Forename,Surname,Email,PhoneNumber;$expand=Division($select=DivisionId,Name,SalesLedgerId))",
     "Status($select=QuoteStatusCode,Description)",
     "SalesPerson($select=UserCode,UserName)",
     "QuoteXtra"
   ].join(",");
   const quote = await client.getById("Quotes", args.quoteId, `$expand=${expand}`);
+  const allLines = quote.QuoteLines || [];
+  const activeLines = [];
+  const deletedLines = [];
+  for (const l of allLines) {
+    const flag = l.StatusFlag;
+    if (flag === "D") deletedLines.push(l);
+    else activeLines.push(l);
+  }
+  const seqKey = (l) => {
+    const seq = l.Sequence;
+    const group = seq == null ? 1 : 0;
+    const seqVal = seq == null ? 0 : seq;
+    return [group, seqVal, l.LineId];
+  };
+  activeLines.sort((a, b) => {
+    const ka = seqKey(a);
+    const kb = seqKey(b);
+    return ka[0] - kb[0] || ka[1] - kb[1] || ka[2] - kb[2];
+  });
   const contact = quote.Contact ? `${quote.Contact.Forename || ""} ${quote.Contact.Surname || ""}`.trim() : "N/A";
   const company = quote.Contact?.Division?.Name || "N/A";
   const accountCode = quote.Contact?.Division?.SalesLedgerId || "N/A";
@@ -21538,12 +21557,13 @@ async function getQuote(args) {
     `## Delivery Address`,
     [quote.DeliveryName, quote.DeliveryAddressLine1, quote.DeliveryAddressLine2, quote.DeliveryAddressLine3, quote.DeliveryPostcode, quote.DeliveryCountry].filter(Boolean).join(", ") || "(none set)",
     "",
-    `## Lines (${quote.QuoteLines?.length || 0})`
+    `## Lines (${activeLines.length} active${deletedLines.length > 0 ? `, ${deletedLines.length} soft-deleted` : ""}) \u2014 sorted by Sequence (printed-quote display order)`
   ].join("\n");
-  if (quote.QuoteLines && quote.QuoteLines.length > 0) {
-    const lineRows = quote.QuoteLines.map((l, i) => {
+  if (activeLines.length > 0) {
+    const lineRows = activeLines.map((l, i) => {
+      const seqLabel = l.Sequence == null ? "Seq \u2014" : `Seq ${l.Sequence}`;
       return [
-        `${i + 1}. **${l.ProductItemId || "\u2014"}** \u2014 ${l.Description}`,
+        `${i + 1}. **[${seqLabel}] ${l.ProductItemId || "\u2014"}** \u2014 ${l.Description}`,
         `   Qty: ${l.DecimalQuantity ?? 0} \xD7 \xA3${l.DecimalPrice?.toFixed(2) ?? "0.00"}`,
         `   Discount: ${l.DecimalDiscountPercentage?.toFixed(1) ?? "0"}% | Net: \xA3${l.DecimalNetValue?.toFixed(2) ?? "0.00"} | Gross: \xA3${l.DecimalGrossValue?.toFixed(2) ?? "0.00"}`,
         `   Cost: \xA3${l.DecimalCostPrice?.toFixed(2) ?? "0.00"} | Margin: ${l.MarginPercentage?.toFixed(1) ?? "N/A"}%`,
@@ -21552,7 +21572,20 @@ async function getQuote(args) {
     });
     output += "\n" + lineRows.join("\n\n");
   } else {
-    output += "\n(No lines on this quote)";
+    output += "\n(No active lines on this quote)";
+  }
+  if (deletedLines.length > 0) {
+    output += `
+
+## Soft-deleted lines (${deletedLines.length}, excluded from totals)`;
+    const deletedRows = deletedLines.map((l) => {
+      const seqLabel = l.Sequence == null ? "Seq \u2014" : `Seq ${l.Sequence}`;
+      return [
+        `- **[${seqLabel}] ${l.ProductItemId || "\u2014"}** \u2014 ${l.Description}`,
+        `  Qty: ${l.DecimalQuantity ?? 0} \xD7 \xA3${l.DecimalPrice?.toFixed(2) ?? "0.00"} | Net: \xA3${l.DecimalNetValue?.toFixed(2) ?? "0.00"} | (LineId: ${l.LineId})`
+      ].join("\n");
+    });
+    output += "\n" + deletedRows.join("\n");
   }
   const quoteAny = quote;
   const xtra = quoteAny.QuoteXtra;
@@ -29550,7 +29583,7 @@ server.tool(
 );
 server.tool(
   "get_quote",
-  "Get full details of a quote including all line items, contact, company, status, totals, and margin. Use this to review a quote before making changes.",
+  "Get full details of a quote including all line items, contact, company, status, totals, and margin. Lines are listed in printed-quote display order (sorted by `Sequence` ascending, with null sequences last and LineId as tiebreak) and each row shows its `Seq` value \u2014 use that to pick correct sequence numbers when inserting or reordering. Soft-deleted lines (StatusFlag='D', excluded from header totals) are reported in their own section below the active lines, never mixed in. Use this to review a quote before making changes.",
   getQuoteSchema.shape,
   async (args) => {
     try {

@@ -225,14 +225,45 @@ export async function searchQuotes(args) {
 }
 export async function getQuote(args) {
     const client = getClient();
+    // StatusFlag is on QuoteLine but not on our TS interface — pull it via $select so
+    // we can split active ('A' / null) from soft-deleted ('D') lines. Sequence is
+    // the printed-quote display order (the Prospect UI sorts by it). We also sort
+    // client-side below so null/missing sequences fall to the end with LineId as
+    // the tiebreak — $orderby=Sequence alone leaves null ordering server-defined.
     const expand = [
-        "QuoteLines($select=LineId,ProductItemId,Description,DecimalQuantity,DecimalPrice,DecimalDiscountPercentage,DecimalNetValue,DecimalGrossValue,DecimalCostPrice,DecimalCostValue,MarginPercentage,Sequence,TaxCode;$orderby=Sequence)",
+        "QuoteLines($select=LineId,ProductItemId,Description,DecimalQuantity,DecimalPrice,DecimalDiscountPercentage,DecimalNetValue,DecimalGrossValue,DecimalCostPrice,DecimalCostValue,MarginPercentage,Sequence,TaxCode,StatusFlag;$orderby=Sequence)",
         "Contact($select=ContactId,Forename,Surname,Email,PhoneNumber;$expand=Division($select=DivisionId,Name,SalesLedgerId))",
         "Status($select=QuoteStatusCode,Description)",
         "SalesPerson($select=UserCode,UserName)",
         "QuoteXtra",
     ].join(",");
     const quote = await client.getById("Quotes", args.quoteId, `$expand=${expand}`);
+    // Split active vs soft-deleted (tenant-wide convention: StatusFlag = 'D' →
+    // deleted, anything else (typically 'A' or null) → active). Sort active by
+    // Sequence with nulls last and LineId as tiebreak so the rendered order
+    // matches the printed quote / UI exactly.
+    const allLines = quote.QuoteLines || [];
+    const activeLines = [];
+    const deletedLines = [];
+    for (const l of allLines) {
+        const flag = l.StatusFlag;
+        if (flag === "D")
+            deletedLines.push(l);
+        else
+            activeLines.push(l);
+    }
+    const seqKey = (l) => {
+        const seq = l.Sequence;
+        // null sequence → 1 (sort group: after numbered), real seq → 0 (sort group: numbered)
+        const group = seq == null ? 1 : 0;
+        const seqVal = seq == null ? 0 : seq;
+        return [group, seqVal, l.LineId];
+    };
+    activeLines.sort((a, b) => {
+        const ka = seqKey(a);
+        const kb = seqKey(b);
+        return ka[0] - kb[0] || ka[1] - kb[1] || ka[2] - kb[2];
+    });
     const contact = quote.Contact ? `${quote.Contact.Forename || ""} ${quote.Contact.Surname || ""}`.trim() : "N/A";
     const company = quote.Contact?.Division?.Name || "N/A";
     const accountCode = quote.Contact?.Division?.SalesLedgerId || "N/A";
@@ -262,12 +293,13 @@ export async function getQuote(args) {
             .filter(Boolean)
             .join(", ") || "(none set)",
         "",
-        `## Lines (${quote.QuoteLines?.length || 0})`,
+        `## Lines (${activeLines.length} active${deletedLines.length > 0 ? `, ${deletedLines.length} soft-deleted` : ""}) — sorted by Sequence (printed-quote display order)`,
     ].join("\n");
-    if (quote.QuoteLines && quote.QuoteLines.length > 0) {
-        const lineRows = quote.QuoteLines.map((l, i) => {
+    if (activeLines.length > 0) {
+        const lineRows = activeLines.map((l, i) => {
+            const seqLabel = l.Sequence == null ? "Seq —" : `Seq ${l.Sequence}`;
             return [
-                `${i + 1}. **${l.ProductItemId || "—"}** — ${l.Description}`,
+                `${i + 1}. **[${seqLabel}] ${l.ProductItemId || "—"}** — ${l.Description}`,
                 `   Qty: ${l.DecimalQuantity ?? 0} × £${l.DecimalPrice?.toFixed(2) ?? "0.00"}`,
                 `   Discount: ${l.DecimalDiscountPercentage?.toFixed(1) ?? "0"}% | Net: £${l.DecimalNetValue?.toFixed(2) ?? "0.00"} | Gross: £${l.DecimalGrossValue?.toFixed(2) ?? "0.00"}`,
                 `   Cost: £${l.DecimalCostPrice?.toFixed(2) ?? "0.00"} | Margin: ${l.MarginPercentage?.toFixed(1) ?? "N/A"}%`,
@@ -277,7 +309,22 @@ export async function getQuote(args) {
         output += "\n" + lineRows.join("\n\n");
     }
     else {
-        output += "\n(No lines on this quote)";
+        output += "\n(No active lines on this quote)";
+    }
+    if (deletedLines.length > 0) {
+        // Render after active lines, with a clear header and a count. Soft-deleted
+        // lines are excluded from header totals (StatusFlag='D' is the tenant-wide
+        // delete marker); shown here only so the caller can see what was on the
+        // quote previously and avoid confusion with active items.
+        output += `\n\n## Soft-deleted lines (${deletedLines.length}, excluded from totals)`;
+        const deletedRows = deletedLines.map((l) => {
+            const seqLabel = l.Sequence == null ? "Seq —" : `Seq ${l.Sequence}`;
+            return [
+                `- **[${seqLabel}] ${l.ProductItemId || "—"}** — ${l.Description}`,
+                `  Qty: ${l.DecimalQuantity ?? 0} × £${l.DecimalPrice?.toFixed(2) ?? "0.00"} | Net: £${l.DecimalNetValue?.toFixed(2) ?? "0.00"} | (LineId: ${l.LineId})`,
+            ].join("\n");
+        });
+        output += "\n" + deletedRows.join("\n");
     }
     // Include Xtra/custom fields if present
     const quoteAny = quote;
