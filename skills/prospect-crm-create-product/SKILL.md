@@ -72,9 +72,9 @@ search_products(searchTerm="NC<DDMMYY>")        # e.g. "NC170626"
 
 Take the highest trailing `NN` found and add 1 (zero-padded). If none exist, start at `01`.
 
-> If the `create_product` MCP tool is deployed (see §7), pass `autoCode=true` and it does this
-> lookup and assigns the next free number for you — preferred, as it closes the race window by
-> re-checking on a clash.
+> Or — preferred — pass `autoCode=true` to `create_product` (deployed v1.21.0, see §7) and it does
+> this lookup and assigns the next free number for you, closing the race window by re-checking on
+> a clash.
 
 ## 3. Price the item
 
@@ -177,10 +177,26 @@ Prefer images from: the **supplier's own website / price-list PDF**, then a repu
 general web image results. Aim for a clean product shot on a plain background, landscape, ≥ 600px on
 the long edge, JPG or PNG.
 
-> Use `WebSearch` to find candidates and `web_fetch` to open the supplier product page. Do **not**
-> fetch images with curl/wget/other downloaders — if `web_fetch`/`WebSearch` can't reach a source,
-> stop and tell Dale rather than working around it. (For a JS-heavy supplier site that returns an
-> empty shell, switch to the Claude-in-Chrome tools to read the rendered page.)
+**Grab the full-size image, not a thumbnail.** Many sites serve a tiny cached preview (a few KB)
+alongside the real asset. Pull the largest version available (the `og:image`, the "download image"
+link, or the product zoom image) — a good product photo is usually 100 KB–1 MB, not ~5 KB. If the
+attached file comes back only a few KB, it's almost certainly a thumbnail; re-do with a bigger
+source. (Seen live: a 4.9 KB cached thumbnail vs a 321 KB proper image from the manufacturer site.)
+
+> Use `WebSearch` to find candidates and `web_fetch` to open the supplier product page (read its
+> `og:image` / gallery URLs). Do **not** fetch images with curl/wget/other downloaders — if
+> `web_fetch`/`WebSearch` can't reach a source, stop and tell Dale rather than working around it.
+> (For a JS-heavy supplier site that returns an empty shell, switch to the Claude-in-Chrome tools to
+> read the rendered page.)
+
+### 5.1a WCG catalogue as a fallback source (own-brand / education items)
+For Westcountry Group's own-brand and education lines that won't appear on a supplier site, use the
+WCG catalogue at `https://www.westcountrygroup.com/catalogue/`. Note it's a **flip-book of full-page
+scans** (130+ JS-rendered pages, no clean per-product image URLs), so `web_fetch` alone won't pull a
+product image. Open the relevant page with the **Claude-in-Chrome** tools and screenshot/crop the
+product. The result is page-scan quality (often with surrounding products/text), so it's a fallback
+for items with no cleaner source — a supplier/manufacturer product shot is always preferred. If WCG
+has a higher-res asset library behind the catalogue, point the skill at that instead for clean cuts.
 
 ### 5.2 Bespoke items (Route B) — expect no exact photo
 Genuinely made-to-order pieces usually have **no exact image online**. In that case offer the
@@ -189,10 +205,16 @@ plainly it's representative, not the exact item** when you present it. Do not in
 a photo.
 
 ### 5.3 Present candidates and wait for approval
-Show Dale 1–3 candidates, each with a thumbnail/preview, the source URL, and a one-line note on why
-it matches (and whether it's exact or representative). Then **wait**. Only proceed with the image he
-picks. If he rejects all of them, leave Manage Images empty and note it — an empty panel is better
-than a wrong picture on a bespoke item.
+Show Dale 1–3 candidates, each with the **direct source image URL he can click**, plus a one-line
+note on why it matches (and whether it's exact or representative). Then **wait**. Only proceed with
+the image he picks. If he rejects all of them, leave Manage Images empty and note it — an empty panel
+is better than a wrong picture on a bespoke item.
+
+> **Always give the real source link, don't rely on an inline preview.** The rendered preview
+> widget/sandbox only loads images from a small CDN allowlist, so external supplier-domain images
+> show blank there even when the URL is valid. Paste the actual `https://…` image URL so Dale opens
+> it at source and judges the real thing. (The upload tool fetches the bytes server-side regardless
+> of the preview.)
 
 ### 5.4 Attach the approved image
 **Preferred — `upload_product_image` MCP tool** (deployed v1.24.0):
@@ -207,13 +229,25 @@ upload_product_image(
 
 The first image uploaded to a product becomes the **primary/main image automatically** — that
 covers the common (new NC) case. Changing primary on a multi-image product still needs the web UI
-for now (separate endpoint not yet wired).
+for now (separate endpoint not yet wired). `makePrimary` / `caption` parameters are intentionally
+NOT in the v1.24.0 schema; the tool will reject unknown args.
 
 Then confirm it landed: open the product's **Manage Images** panel in the web UI and eyeball it.
 
 **Interim — if `upload_product_image` is not yet deployed:** save the approved image to the project
 outputs folder, give Dale the file, and he drags it into **Manage Images → Manage Images** on the
 product (Details tab, top-right). The skill should hand over the file rather than skip the image.
+
+> **Worked examples (live tests, 22 Jun 2026):**
+> - *Exact match by reference* — `NC LS21 Circular Table 700 Diameter-1` (Gresham, Mfr Ref
+>   `LS21C1Z`). The reference resolved to Gresham's official LS21 page (`gof.co.uk/product/ls21/`);
+>   attached the clean circular cut-out (`…/LS21-thumb-1.png`, 321 KB). Exact manufacturer image.
+> - *Bespoke — representative* — `NC0207202507` "Bespoke Cantilever tables" (Duncan Reeds, Mfr Ref
+>   N/A). No exact photo exists; offered representative beech-top cantilever desks and attached the
+>   approved one, clearly flagged as representative.
+> - *Order-ref ≠ catalogue SKU* — `NC17062601` (Hawk, Mfr Ref `WESTCOUNTRY-31797`). The reference is
+>   a bespoke order number, not a catalogue code, so searching it found no exact hit; fell back to
+>   manufacturer + model (`Hawk D-End Boardroom Table`) and found a genuine Hawk range image.
 
 ## 6. Put it on the quote
 
@@ -276,10 +310,11 @@ Third write handler in `src/tools/products.ts` for attaching an image to **Manag
   forces `application/json`).
 - **Permission map** — `upload_product_image: { module: "catalogue", action: "edit" }`. Reuses the
   catalogue/edit grant from 7a, so **no `config/permissions.json` change** beyond what 7a added.
-- **`makePrimary` — intentionally NOT in the v1.24.0 schema.** The first image uploaded to a
-  product becomes primary on Prospect automatically (covers the common new-NC case). Changing
+- **`makePrimary` / `caption` — intentionally NOT in the v1.24.0 schema.** The first image uploaded
+  to a product becomes primary on Prospect automatically (covers the common new-NC case). Changing
   primary on a multi-image product needs a separate endpoint not yet captured; punted to a
-  follow-up release.
+  follow-up release. Prospect's `UploadImage` endpoint takes raw bytes only — there's nowhere to
+  send a caption, so the field isn't accepted.
 
 ## Pitfalls
 - **Create-before-checking** — the §1 duplicate search is mandatory. Same item + same manufacturer
@@ -292,7 +327,7 @@ Third write handler in `src/tools/products.ts` for attaching an image to **Manag
   margin is £821.10 sell, NOT £391 × 1.52.
 - **ProductItems composite key** — `update_product` PATCHes
   `ProductItems(OperatingCompanyCode='A',ProductItemId='<code>')`, NOT
-  `ProductItems('<code>')`. The latter returns HTTP 500 on this tenant.
+  `ProductItems('<code>')`. The latter returns HTTP 500 on this tenant (resolved v1.22.0).
 - **Sell / cost / category are create-only** — `update_product` cannot change them
   (`UpdateVisibility="never"`). Use `create_product` (or the Prospect UI) to set the price.
 - **Don't put colour/finish in the product Description** if it'll vary per quote — keep the product
@@ -304,15 +339,21 @@ Third write handler in `src/tools/products.ts` for attaching an image to **Manag
   rendered pages). No curl/wget/archive mirrors.
 
 ## Changelog
+- **2026-06-22 (v2.1)** — Refinements from live testing: present candidates as clickable source
+  URLs (the preview widget only loads allowlisted-CDN images, so supplier-domain previews render
+  blank); grab the full-size image not a tiny cached thumbnail (4.9 KB thumb vs 321 KB proper
+  image); added §5.1a WCG catalogue (`westcountrygroup.com/catalogue/`) as a Chrome-driven fallback
+  source for own-brand/education items; added three worked image examples (Gresham LS21 exact match,
+  Duncan Reeds bespoke representative, Hawk order-ref fallback). Duplicate guard and
+  `upload_product_image` both verified working live.
 - **2026-06-22 (v2)** — Added §1 mandatory duplicate check (search manufacturer product code +
   description before creating; reuse the existing SKU if found) with a matching server-side guard in
-  `create_product` (§7b, shipped v1.24.0). Added §5 "Find and attach a product image (Manage
-  Images)": query strategy (supplier code → range → keywords), Route-B representative-image
-  handling, mandatory show-and-approve gate before attaching, and the new `upload_product_image`
-  MCP tool (with an interim manual-upload fallback). Endpoint shape confirmed via live DevTools
-  capture: bound OData action `POST /ProductItems('A','<code>')/UploadImage` with raw image bytes
-  as the body (not multipart, not a child collection). Renumbered sections (code → §2, price → §3,
-  create → §4, image → §5, quote → §6, tools → §7).
+  `create_product` (§7b). Added §5 "Find and attach a product image (Manage Images)": query strategy
+  (supplier code → range → keywords), Route-B representative-image handling, mandatory
+  show-and-approve gate before attaching, and the new `upload_product_image` MCP tool (with an
+  interim manual-upload fallback). Renumbered sections (code → §2, price → §3, create → §4, image →
+  §5, quote → §6, deploy → §7) and added the companion tool spec + Claude Code prompt for the new
+  tool and guard.
 - **2026-06-17 (v1)** — Initial skill. Created from the Marpool / Clyst Heath boardroom-table
   amendment (opps 14050 / 15672). Documents the NC naming convention + same-day sequential lookup,
   the SharePoint Furniture Price Lists + `#Supplier Discounts` pricing route, the bespoke

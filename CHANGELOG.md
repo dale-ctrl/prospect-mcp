@@ -6,6 +6,28 @@ The format is based on Keep a Changelog, and this project adheres to Semantic Ve
 
 ## [Unreleased]
 
+## [1.25.0] - 2026-06-22
+### Changed — `prospect-crm-create-product` skill v2.1 (image-search refinements from live testing)
+
+Docs-only release. The new `upload_product_image` tool and `create_product` duplicate guard shipped in v1.24.0 hit live use this morning, and three rough edges in how the create-product skill guides image search and presentation showed up — this release adds three small but load-bearing pieces of guidance plus three worked examples, and tightens the §4 / §5.4 / §7 / Pitfalls wording so the deployed-state matches what the team actually has.
+
+#### Image-search refinements
+- **"Grab the full-size image, not a thumbnail"** rule in §5.1. Live this morning: an image came back at 4.9 KB because the model grabbed a cached thumbnail when a 321 KB proper image was available on the same page. The skill now tells the caller to pull the `og:image` / "download image" / product-zoom URL and treat anything < ~5 KB as a thumbnail-instead-of-asset signal to redo.
+- **§5.1a "WCG catalogue as a fallback source"** — new section. For WCG own-brand / education lines that won't appear on a supplier site, `https://www.westcountrygroup.com/catalogue/` is a flip-book of full-page scans (130+ JS-rendered pages, no clean per-product image URLs), so `web_fetch` alone won't pull a product image. Use the Claude-in-Chrome tools to screenshot/crop instead. Page-scan quality is a fallback only — supplier/manufacturer product shots remain preferred.
+- **§5.3 "Always give the real source link"** — the rendered preview widget only loads images from a small CDN allowlist, so external supplier-domain images render blank in the preview even when the URL is valid. The skill now tells the caller to paste the actual `https://…` image URL so Dale opens it at source.
+- **Three worked examples in §5.4**: exact-match by manufacturer reference (Gresham LS21 circular table → clean cut-out from `gof.co.uk`), bespoke-representative (Duncan Reeds cantilever desks), and order-ref ≠ catalogue SKU (Hawk WESTCOUNTRY-31797 falling back to manufacturer + model).
+
+#### Tightening (deployed-state accuracy)
+The v2.1 paste was authored from the original v2 spec rather than the v2 currently in the repo, so it reverted some of the deployed-state accuracy from v1.21.0 → v1.24.0. Patched before shipping:
+- §1 server-side-guard note rewired from "once the updated `create_product` tool is deployed" → "from v1.24.0".
+- §2 autoCode tip → "(deployed v1.21.0, see §7)".
+- §4 header → "(deployed v1.21.0; fixes v1.22.0; duplicate guard v1.24.0)". Default `categoryId` note added (the schema defaults to `"STOCK"`). Description of duplicate-guard outcome added.
+- §5.4 example code → `makePrimary` and `caption` lines dropped (neither is in the v1.24.0 schema; the call would reject unknown args). Header → "(deployed v1.24.0)" with an explicit note that the first uploaded image is auto-primary and `makePrimary`/`caption` aren't accepted by this Prospect endpoint.
+- §7 rewritten as "The MCP tools that back this skill" (deployed-state form) with the ProductItem quirks callout from v2 (composite key / raw integer prices / UpdateVisibility=never governs PATCH not POST / CategoryId required on POST).
+- **Pitfalls** entry "ProductItems key is a string" → corrected to **composite key**, with the full key URL form spelled out. New entry "Sell / cost / category are create-only" added.
+
+All other content from the v2.1 paste was kept verbatim with the standard UTF-8 mojibake cleanup (em-dashes, §, ×, ÷, £, …, ≥, ≠).
+
 ## [1.24.0] - 2026-06-22
 ### Added — `upload_product_image` + `create_product` duplicate guard + create-product skill v2
 
