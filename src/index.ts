@@ -107,6 +107,7 @@ import {
 import {
   createProductSchema, createProduct,
   updateProductSchema, updateProduct,
+  uploadProductImageSchema, uploadProductImage,
 } from "./tools/products.js";
 
 import {
@@ -503,6 +504,7 @@ const TOOL_PERMISSION_MAP: Record<string, { module: string; action: string }> = 
   create_inventory: { module: "inventory", action: "create" },
   create_product: { module: "catalogue", action: "create" },
   update_product: { module: "catalogue", action: "edit" },
+  upload_product_image: { module: "catalogue", action: "edit" },
   update_inventory: { module: "inventory", action: "edit" },
   save_quoting_lesson: { module: "knowledge", action: "create" },
   save_product_note: { module: "knowledge", action: "create" },
@@ -2162,14 +2164,19 @@ server.tool("get_inventory_lookups", "List available inventory types and statuse
 // ─── Catalogue: Product Create/Update ────────────────────────
 
 registerWriteTool("create_product",
-  "Create a new product (ProductItem) in the catalogue. Use for bespoke / non-catalogue (NC) items before they go on a quote. Pass productItemId, or omit it with autoCode=true to auto-generate the next NC<DDMMYY><NN> code. Requires description, sellPrice, costPrice.",
+  "Create a new product (ProductItem) in the catalogue. Use for bespoke / non-catalogue (NC) items before they go on a quote. Pass productItemId, or omit it with autoCode=true to auto-generate the next NC<DDMMYY><NN> code. Requires description, sellPrice, costPrice. Before inserting, the tool checks for an existing product with the same manufacturerReference (+ manufacturer when given) and short-circuits with `duplicate: true` + the existing code rather than creating a second SKU — set allowDuplicate=true only for a genuine variant.",
   createProductSchema.shape,
   async (args) => { try { const result = await createProduct(createProductSchema.parse(args)); return { content: [{ type: "text" as const, text: result }] }; } catch (err) { return { content: [{ type: "text" as const, text: `Error: ${(err as Error).message}` }], isError: true }; } });
 
 registerWriteTool("update_product",
-  "Update an existing product (ProductItem) — description, sell/cost price, supplier, references, obsolete flag.",
+  "Update an existing product (ProductItem) — description, supplier, references, obsolete flag. Note: sell/cost price and CategoryId are create-only on this entity (UpdateVisibility=never); use create_product (or the Prospect UI) to set those.",
   updateProductSchema.shape,
   async (args) => { try { const result = await updateProduct(updateProductSchema.parse(args)); return { content: [{ type: "text" as const, text: result }] }; } catch (err) { return { content: [{ type: "text" as const, text: `Error: ${(err as Error).message}` }], isError: true }; } });
+
+registerWriteTool("upload_product_image",
+  "Attach an image to a ProductItem's Manage Images panel. Provide imageUrl (server fetches the bytes) OR imageBase64 (exactly one). Allowed types: image/jpeg, image/png, image/gif, image/webp; max 8 MB. The first image uploaded to a product becomes the primary/main image automatically — changing primary on a multi-image product needs the web UI for now (separate endpoint not yet wired).",
+  uploadProductImageSchema.shape,
+  async (args) => { try { const result = await uploadProductImage(uploadProductImageSchema.parse(args)); return { content: [{ type: "text" as const, text: result }] }; } catch (err) { return { content: [{ type: "text" as const, text: `Error: ${(err as Error).message}` }], isError: true }; } });
 
 // ─── Gap Fix: Division RFM & Profiling ───────────────────────
 

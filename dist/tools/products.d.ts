@@ -49,6 +49,7 @@ export declare const createProductSchema: z.ZodObject<{
     barcode: z.ZodOptional<z.ZodString>;
     taxCode: z.ZodOptional<z.ZodString>;
     obsolete: z.ZodDefault<z.ZodOptional<z.ZodBoolean>>;
+    allowDuplicate: z.ZodDefault<z.ZodOptional<z.ZodBoolean>>;
 }, "strip", z.ZodTypeAny, {
     description: string;
     costPrice: number;
@@ -57,6 +58,7 @@ export declare const createProductSchema: z.ZodObject<{
     sellPrice: number;
     unitDescription: string;
     obsolete: boolean;
+    allowDuplicate: boolean;
     productItemId?: string | undefined;
     taxCode?: string | undefined;
     extendedDescription?: string | undefined;
@@ -87,6 +89,7 @@ export declare const createProductSchema: z.ZodObject<{
     alternateReference2?: string | undefined;
     barcode?: string | undefined;
     obsolete?: boolean | undefined;
+    allowDuplicate?: boolean | undefined;
 }>;
 export declare const updateProductSchema: z.ZodObject<{
     productItemId: z.ZodString;
@@ -121,4 +124,24 @@ export declare const updateProductSchema: z.ZodObject<{
 }>;
 export declare function createProduct(args: z.infer<typeof createProductSchema>): Promise<string>;
 export declare function updateProduct(args: z.infer<typeof updateProductSchema>): Promise<string>;
+export declare const uploadProductImageSchema: z.ZodObject<{
+    productItemId: z.ZodString;
+    imageUrl: z.ZodOptional<z.ZodString>;
+    imageBase64: z.ZodOptional<z.ZodString>;
+    filename: z.ZodOptional<z.ZodString>;
+    contentType: z.ZodOptional<z.ZodString>;
+}, "strip", z.ZodTypeAny, {
+    productItemId: string;
+    contentType?: string | undefined;
+    filename?: string | undefined;
+    imageUrl?: string | undefined;
+    imageBase64?: string | undefined;
+}, {
+    productItemId: string;
+    contentType?: string | undefined;
+    filename?: string | undefined;
+    imageUrl?: string | undefined;
+    imageBase64?: string | undefined;
+}>;
+export declare function uploadProductImage(args: z.infer<typeof uploadProductImageSchema>): Promise<string>;
 //# sourceMappingURL=products.d.ts.map

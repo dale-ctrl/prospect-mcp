@@ -6,6 +6,38 @@ The format is based on Keep a Changelog, and this project adheres to Semantic Ve
 
 ## [Unreleased]
 
+## [1.24.0] - 2026-06-22
+### Added — `upload_product_image` + `create_product` duplicate guard + create-product skill v2
+
+Three changes driven by the bespoke-furniture quoting flow Dale walked through this morning. The skill (`skills/prospect-crm-create-product/SKILL.md`) is rewritten to v2 to teach the new behaviour.
+
+#### `upload_product_image` (new write tool)
+Attach a JPG/PNG/GIF/WebP image to a product's **Manage Images** panel without leaving the Cowork session. The pre-v1.24.0 fallback was "save the file and drag it into the web UI by hand" — fine for one product, painful for a furniture batch.
+
+- **Endpoint** confirmed against the live tenant via browser DevTools capture (2026-06-22): bound OData action `POST /ProductItems('A','<code>')/UploadImage` with the **raw image bytes** as the request body and `Content-Type: image/<format>`. Not multipart, not a JSON wrapper, not a separate `ProductItemImages` collection — much simpler than the original spec anticipated. Composite key uses the **positional** form `('A','<code>')` here (matches what the web UI sends), distinct from the named form `update_product`'s PATCH uses. Both work for Prospect.
+- **Inputs**: `productItemId` (required), exactly one of `imageUrl` (server fetches the bytes itself) or `imageBase64`, plus optional `filename` / `contentType`. The exactly-one-of guard is enforced in the handler rather than via Zod `.refine()` so the schema stays a plain `ZodObject` and the MCP wrapper's `.shape` access keeps working.
+- **Guardrails**: MIME must be `image/jpeg`, `image/png`, `image/gif`, or `image/webp`; size cap 8 MB.
+- **Wire**: new `client.postBinary(pathAfterBase, bytes, contentType)` helper in `src/client.ts` — the existing `client.post` forces `application/json`, so binary uploads couldn't go through it. The new helper does its own fetch (mirroring `getBinary`) so the Content-Type and raw-body shape are caller-controlled.
+- **Permissions**: gated under `catalogue.edit`, reusing the grant added for `create_product`/`update_product` in v1.21.0. No `config/permissions.json` change.
+- **`makePrimary` is intentionally NOT in the schema for v1.24.0.** The first image uploaded to a product becomes primary on Prospect automatically — covers the common new-NC case. Changing primary on a multi-image product needs a separate endpoint we haven't captured yet; punted to a follow-up release. The tool description spells this out.
+
+#### `create_product` — manufacturer-reference duplicate guard
+Before inserting a new ProductItem, `create_product` now searches for an existing product with the same `ManufacturerReference` (and the same `Manufacturer` when supplied). If a match is found, it returns the existing `ProductItemId` + current sell / cost / obsolete state inline rather than creating a second SKU.
+
+- The check runs before the existing existence-by-code guard, so even when a fresh `NC<DDMMYY><NN>` code is auto-generated, a same-supplier-reference duplicate is caught.
+- New `allowDuplicate: boolean (default false)` arg to override for genuine variants (same supplier code, different size/finish).
+- Reports up to three existing matches with their description, sell, cost, manufacturer, ref, and an `[OBSOLETE]` tag where applicable so the caller can see whether it's a live SKU or an old retired one.
+- OData single-quote escape applied to the filter values so supplier refs containing apostrophes don't break the search.
+
+This backstops §1 of the create-product skill (which already tells callers to search before creating). Even if the search was skipped, the server-side guard ensures duplicates don't slip in silently.
+
+#### `skills/prospect-crm-create-product/SKILL.md` → v2
+- New **§1 mandatory duplicate check** with explicit search ordering (manufacturer reference → description → inspect) and the decision tree: match found → reuse; no match → continue.
+- New **§5 "Find and attach a product image (Manage Images)"** section: query strategy (supplier code → range/model → keywords), Route-B representative-image handling for bespoke items, the **show-and-approve** gate before any attach, and the new `upload_product_image` tool with `imageUrl` server-fetch flow.
+- **§7** updated to describe the three tool deployments (v1.21.0 create/update, v1.22.0 quirks resolved, v1.24.0 duplicate guard + image upload) and the live-confirmed endpoint shape for image upload.
+- Renumbered sections so code → §2, price → §3, create → §4, image → §5, quote → §6, tools → §7.
+- File rewritten in proper UTF-8 (the v2 paste had mojibake on dashes, `§`, `×`, `÷`, `£`, `…`, `≥`).
+
 ## [1.23.0] - 2026-06-17
 ### Changed — `get_quote` line rendering: explicit Sequence, soft-deleted lines split out
 

@@ -104,6 +104,11 @@ export const createProductSchema = z.object({
     barcode: z.string().optional().describe("Barcode."),
     taxCode: z.string().optional().describe("Tax / VAT code (defaults to the tenant standard if omitted)."),
     obsolete: z.boolean().optional().default(false).describe("Mark obsolete on creation (default false)."),
+    allowDuplicate: z
+        .boolean()
+        .optional()
+        .default(false)
+        .describe("Suppress the manufacturer-reference duplicate guard. Default false: when manufacturerReference matches an existing product, the tool returns the existing code instead of creating a second SKU. Set true only for a genuine variant (same supplier code, different size/finish) where a duplicate is intentional."),
 });
 export const updateProductSchema = z.object({
     productItemId: z
@@ -134,7 +139,39 @@ export async function createProduct(args) {
         }
         code = await nextNcCode(client);
     }
-    // 2. Guard against overwriting an existing SKU (ProductItems POST would otherwise clash)
+    // 2a. Manufacturer-reference duplicate guard.
+    //     Many "bespoke" items are already in the catalogue under a different
+    //     NC code from a previous job — re-creating them spawns duplicate SKUs
+    //     that fragment sales history. Search by ManufacturerReference (and
+    //     Manufacturer when supplied) BEFORE the existence-by-code check, and
+    //     short-circuit with the existing code unless allowDuplicate=true. The
+    //     skill (prospect-crm-create-product §1) is supposed to do this search
+    //     first; this is the server-side backstop.
+    if (args.manufacturerReference && !args.allowDuplicate) {
+        const odataEscape = (s) => s.replace(/'/g, "''");
+        const refFilter = `ManufacturerReference eq '${odataEscape(args.manufacturerReference)}'`;
+        const mfrFilter = args.manufacturer
+            ? ` and Manufacturer eq '${odataEscape(args.manufacturer)}'`
+            : "";
+        const dupes = await client.get("ProductItems", `$filter=${refFilter}${mfrFilter}&$select=ProductItemId,Description,DecimalSellingPrice,DecimalCostPrice,Manufacturer,ManufacturerReference,Obsolete&$top=3`);
+        if (dupes.value.length > 0) {
+            const lines = dupes.value.map((p) => {
+                const sell = typeof p.DecimalSellingPrice === "number" ? `£${p.DecimalSellingPrice.toFixed(2)}` : "N/A";
+                const cost = typeof p.DecimalCostPrice === "number" ? `£${p.DecimalCostPrice.toFixed(2)}` : "N/A";
+                const obsoleteTag = p.Obsolete === 1 || p.Obsolete === true ? " [OBSOLETE]" : "";
+                return `- **${p.ProductItemId}**${obsoleteTag} — ${p.Description}\n  Sell ${sell} / Cost ${cost} | Mfr: ${p.Manufacturer ?? "N/A"} | Ref: ${p.ManufacturerReference ?? "N/A"}`;
+            });
+            return [
+                `**duplicate: true** — a product with ManufacturerReference '${args.manufacturerReference}'${args.manufacturer ? ` (Manufacturer '${args.manufacturer}')` : ""} already exists.`,
+                "",
+                "Existing match(es):",
+                ...lines,
+                "",
+                "Use the existing code on the quote instead of creating a new one. If this is a genuine variant (same supplier code, different size/finish) and you really need a second SKU, re-run with `allowDuplicate: true`.",
+            ].join("\n");
+        }
+    }
+    // 2b. Guard against overwriting an existing SKU (ProductItems POST would otherwise clash)
     const existing = await client.get("ProductItems", `$filter=ProductItemId eq '${code}'&$select=ProductItemId&$top=1`);
     if (existing.value.length > 0) {
         return `Product '${code}' already exists. Pick a different code (or use autoCode=true to take the next free NC number), then retry.`;
@@ -226,5 +263,134 @@ export async function updateProduct(args) {
     const keyExpr = `OperatingCompanyCode='${OPERATING_COMPANY_CODE}',ProductItemId='${productItemId}'`;
     await client.patch("ProductItems", keyExpr, body);
     return `Product '${productItemId}' updated. Fields changed: ${Object.keys(body).join(", ")}`;
+}
+// ─── upload_product_image ─────────────────────────────────────
+//
+// Attach an image to a product's Manage Images panel. Endpoint confirmed via
+// DevTools capture against the live tenant 2026-06-22 — it's a bound OData
+// action that takes the raw image bytes as the request body (NOT multipart,
+// NOT a JSON wrapper, NOT a separate ProductItemImages collection):
+//
+//     POST /ProductItems('A','<code>')/UploadImage
+//     Content-Type: image/<format>     (image/png, image/jpeg, image/gif, image/webp)
+//     Content-Length: <byte count>
+//     <raw image bytes>
+//
+// Composite key uses the POSITIONAL form ('A','<code>') here, matching what
+// the web UI sends — that's distinct from the NAMED form
+// (OperatingCompanyCode='A',ProductItemId='<code>') used for PATCH in
+// update_product. Both work for Prospect; we follow the UI's lead for this
+// endpoint.
+//
+// makePrimary is intentionally NOT in the schema for v1.24.0: the first image
+// uploaded to a product becomes primary on Prospect by default, which covers
+// the common (new NC item) case. Changing primary on a multi-image product
+// needs a separate endpoint not yet captured — punt to a follow-up release.
+const PRODUCT_IMAGE_MAX_BYTES = 8 * 1024 * 1024; // 8 MB
+const ALLOWED_IMAGE_MIMES = /^image\/(jpe?g|png|gif|webp)$/i;
+function extFromMime(mime) {
+    const m = mime.toLowerCase();
+    if (m.startsWith("image/jpeg") || m.startsWith("image/jpg"))
+        return "jpg";
+    if (m.startsWith("image/png"))
+        return "png";
+    if (m.startsWith("image/gif"))
+        return "gif";
+    if (m.startsWith("image/webp"))
+        return "webp";
+    return "bin";
+}
+// Exactly-one-of imageUrl / imageBase64 is enforced in the handler (not via
+// .refine()) so the schema stays a plain ZodObject and the MCP wrapper's
+// `.shape` access keeps working.
+export const uploadProductImageSchema = z.object({
+    productItemId: z
+        .string()
+        .describe("Product code / SKU (ProductItemId) to attach the image to, e.g. 'NC17062601'."),
+    imageUrl: z
+        .string()
+        .url()
+        .optional()
+        .describe("URL of the image to attach — the server fetches the bytes itself. Provide this OR imageBase64 (exactly one)."),
+    imageBase64: z
+        .string()
+        .optional()
+        .describe("Base64-encoded image bytes (no `data:` prefix). Provide this OR imageUrl (exactly one)."),
+    filename: z
+        .string()
+        .optional()
+        .describe("Optional filename (informational only — Prospect names the stored asset itself). Defaults to '<productItemId>.<ext>'."),
+    contentType: z
+        .string()
+        .optional()
+        .describe("MIME type, e.g. 'image/jpeg' or 'image/png'. Inferred from the fetched response / filename if omitted; falls back to 'image/jpeg'. Must be one of: image/jpeg, image/png, image/gif, image/webp."),
+});
+export async function uploadProductImage(args) {
+    const client = getClient();
+    // Refine-style guard: exactly one of imageUrl / imageBase64.
+    const hasUrl = !!args.imageUrl;
+    const hasB64 = !!args.imageBase64;
+    if (hasUrl === hasB64) {
+        return "Provide exactly one of imageUrl or imageBase64.";
+    }
+    // 1. Resolve bytes + content type.
+    let bytes;
+    let contentType;
+    if (args.imageUrl) {
+        const res = await fetch(args.imageUrl);
+        if (!res.ok) {
+            return `Failed to fetch imageUrl: HTTP ${res.status} ${res.statusText} from ${args.imageUrl}`;
+        }
+        contentType =
+            args.contentType || res.headers.get("content-type") || "image/jpeg";
+        bytes = Buffer.from(await res.arrayBuffer());
+    }
+    else {
+        // imageBase64 branch — refine guarantees exactly one of the two is set.
+        bytes = Buffer.from(args.imageBase64, "base64");
+        contentType = args.contentType || "image/jpeg";
+    }
+    // Strip any "; charset=..." suffix from the content type before validating.
+    contentType = contentType.split(";")[0].trim().toLowerCase();
+    // 2. Guardrails — type + size.
+    if (!ALLOWED_IMAGE_MIMES.test(contentType)) {
+        return `Unsupported image type '${contentType}'. Allowed: image/jpeg, image/png, image/gif, image/webp.`;
+    }
+    if (bytes.length === 0) {
+        return "Image resolved to zero bytes — check the URL or base64 payload.";
+    }
+    if (bytes.length > PRODUCT_IMAGE_MAX_BYTES) {
+        return `Image is ${(bytes.length / 1024 / 1024).toFixed(2)} MB which exceeds the 8 MB cap — resize before upload.`;
+    }
+    // 3. POST raw bytes to the bound action.
+    //    URL escape the product code in case it contains apostrophes (OData
+    //    escape doubles single quotes); the OperatingCompanyCode is the fixed
+    //    1-char WCG code 'A'.
+    const code = args.productItemId.replace(/'/g, "''");
+    const path = `ProductItems('${OPERATING_COMPANY_CODE}','${code}')/UploadImage`;
+    let response;
+    try {
+        response = await client.postBinary(path, bytes, contentType);
+    }
+    catch (err) {
+        return `Image upload failed for '${args.productItemId}': ${err.message}`;
+    }
+    // The captured DevTools call shows no response body shape (caller fired and
+    // forgot in the browser). The server may return {value: <imageId>}, the
+    // updated ProductItem, or nothing — surface whatever came back so the
+    // first-live caller can refine this output if useful.
+    const responseNote = response == null
+        ? "(server returned no body — image attached)"
+        : `(server response: ${JSON.stringify(response).slice(0, 200)})`;
+    const sizeKb = (bytes.length / 1024).toFixed(1);
+    const filename = args.filename || `${args.productItemId}.${extFromMime(contentType)}`;
+    return [
+        `Image uploaded to '${args.productItemId}'.`,
+        `**File:** ${filename} (${contentType}, ${sizeKb} KB)`,
+        `**Endpoint:** POST /${path}`,
+        responseNote,
+        "",
+        "Verify in **Manage Images** on the product. The first image uploaded to a product is normally auto-primary in Prospect; if you need to change primary on a multi-image product, use the web UI for now (separate endpoint not yet wired).",
+    ].join("\n");
 }
 //# sourceMappingURL=products.js.map

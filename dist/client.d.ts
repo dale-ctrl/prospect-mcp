@@ -86,6 +86,20 @@ export declare class ProspectClient {
         contentType: string;
     }>;
     /**
+     * POST raw bytes to a path, with a caller-supplied Content-Type.
+     * Used for bound OData actions that accept a binary body rather than a JSON
+     * wrapper or multipart form — confirmed against Prospect's web UI in v1.24.0
+     * via DevTools capture on /ProductItems('A','<code>')/UploadImage, which
+     * takes the raw image bytes with Content-Type: image/<format>.
+     *
+     * `pathAfterBase` is everything after the base URL, e.g.
+     *   ProductItems('A','NC17062601')/UploadImage
+     * The method does its own fetch (not fetchWithRetry) because that helper
+     * forces Content-Type: application/json. Returns parsed JSON if the server
+     * responded with one, otherwise undefined (e.g. 204 No Content / empty body).
+     */
+    postBinary<T>(pathAfterBase: string, body: Buffer | Uint8Array, contentType: string): Promise<T>;
+    /**
      * Invoke a bound OData action on a single entity — POST /{entitySet}({id})/{actionName}().
      * Bare form (no namespace prefix) per the form Prospect's own UI uses. The "Default."
      * alias documented in Swagger is a no-op on the regional host.

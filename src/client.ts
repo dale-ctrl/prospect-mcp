@@ -243,6 +243,67 @@ export class ProspectClient {
   }
 
   /**
+   * POST raw bytes to a path, with a caller-supplied Content-Type.
+   * Used for bound OData actions that accept a binary body rather than a JSON
+   * wrapper or multipart form — confirmed against Prospect's web UI in v1.24.0
+   * via DevTools capture on /ProductItems('A','<code>')/UploadImage, which
+   * takes the raw image bytes with Content-Type: image/<format>.
+   *
+   * `pathAfterBase` is everything after the base URL, e.g.
+   *   ProductItems('A','NC17062601')/UploadImage
+   * The method does its own fetch (not fetchWithRetry) because that helper
+   * forces Content-Type: application/json. Returns parsed JSON if the server
+   * responded with one, otherwise undefined (e.g. 204 No Content / empty body).
+   */
+  async postBinary<T>(
+    pathAfterBase: string,
+    body: Buffer | Uint8Array,
+    contentType: string,
+  ): Promise<T> {
+    await this.ensureProfileId();
+    const url = `${this.baseUrl}/${pathAfterBase}`;
+    const headers: Record<string, string> = {
+      Authorization: `Bearer ${this.token}`,
+      "Content-Type": contentType,
+      Accept: "application/json",
+      "x-locale": this.locale,
+    };
+    if (this.profileId) headers["x-profile-id"] = this.profileId;
+
+    // Copy into a fresh Uint8Array backed by an ArrayBuffer (not SharedArrayBuffer)
+    // so TS's BlobPart type accepts it — Node's Buffer is typed against
+    // ArrayBufferLike which TS's lib treats as too wide. The actual bytes round-
+    // trip identically. Wrapping in a Blob also lets fetch set Content-Length.
+    const bodyBytes = new Uint8Array(body.length);
+    bodyBytes.set(body);
+    const blob = new Blob([bodyBytes], { type: contentType });
+    const res = await fetch(url, {
+      method: "POST",
+      headers,
+      body: blob,
+    });
+
+    if (res.status === 204) return undefined as T;
+
+    const ct = res.headers.get("content-type") || "";
+    if (!ct.includes("json")) {
+      if (!res.ok) {
+        throw new Error(
+          `Prospect API error: HTTP ${res.status} ${res.statusText}\nURL: ${url}\nResponse: ${await res.text()}`,
+        );
+      }
+      return undefined as T;
+    }
+    const data = await res.json();
+    if (!res.ok) {
+      const oe = data as ODataError;
+      const msg = oe?.error?.message || JSON.stringify(data);
+      throw new Error(`Prospect API error: HTTP ${res.status}\nMessage: ${msg}\nURL: ${url}`);
+    }
+    return data as T;
+  }
+
+  /**
    * Invoke a bound OData action on a single entity — POST /{entitySet}({id})/{actionName}().
    * Bare form (no namespace prefix) per the form Prospect's own UI uses. The "Default."
    * alias documented in Swagger is a no-op on the regional host.

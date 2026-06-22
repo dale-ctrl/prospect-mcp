@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// prospect-crm-mcp v1.23.0 — bundled by esbuild on 2026-06-18T12:23:08.979Z
+// prospect-crm-mcp v1.24.0 — bundled by esbuild on 2026-06-22T07:15:28.158Z
 // Single-file MCP server; no node_modules required at runtime.
 var __create = Object.create;
 var __defProp = Object.defineProperty;
@@ -21185,6 +21185,59 @@ Response: ${await res.text()}`
     return { bytes, contentType };
   }
   /**
+   * POST raw bytes to a path, with a caller-supplied Content-Type.
+   * Used for bound OData actions that accept a binary body rather than a JSON
+   * wrapper or multipart form — confirmed against Prospect's web UI in v1.24.0
+   * via DevTools capture on /ProductItems('A','<code>')/UploadImage, which
+   * takes the raw image bytes with Content-Type: image/<format>.
+   *
+   * `pathAfterBase` is everything after the base URL, e.g.
+   *   ProductItems('A','NC17062601')/UploadImage
+   * The method does its own fetch (not fetchWithRetry) because that helper
+   * forces Content-Type: application/json. Returns parsed JSON if the server
+   * responded with one, otherwise undefined (e.g. 204 No Content / empty body).
+   */
+  async postBinary(pathAfterBase, body, contentType) {
+    await this.ensureProfileId();
+    const url = `${this.baseUrl}/${pathAfterBase}`;
+    const headers = {
+      Authorization: `Bearer ${this.token}`,
+      "Content-Type": contentType,
+      Accept: "application/json",
+      "x-locale": this.locale
+    };
+    if (this.profileId) headers["x-profile-id"] = this.profileId;
+    const bodyBytes = new Uint8Array(body.length);
+    bodyBytes.set(body);
+    const blob = new Blob([bodyBytes], { type: contentType });
+    const res = await fetch(url, {
+      method: "POST",
+      headers,
+      body: blob
+    });
+    if (res.status === 204) return void 0;
+    const ct = res.headers.get("content-type") || "";
+    if (!ct.includes("json")) {
+      if (!res.ok) {
+        throw new Error(
+          `Prospect API error: HTTP ${res.status} ${res.statusText}
+URL: ${url}
+Response: ${await res.text()}`
+        );
+      }
+      return void 0;
+    }
+    const data = await res.json();
+    if (!res.ok) {
+      const oe = data;
+      const msg = oe?.error?.message || JSON.stringify(data);
+      throw new Error(`Prospect API error: HTTP ${res.status}
+Message: ${msg}
+URL: ${url}`);
+    }
+    return data;
+  }
+  /**
    * Invoke a bound OData action on a single entity — POST /{entitySet}({id})/{actionName}().
    * Bare form (no namespace prefix) per the form Prospect's own UI uses. The "Default."
    * alias documented in Swagger is a no-op on the regional host.
@@ -24722,7 +24775,10 @@ var createProductSchema = external_exports.object({
   alternateReference2: external_exports.string().optional().describe("Alternate reference 2."),
   barcode: external_exports.string().optional().describe("Barcode."),
   taxCode: external_exports.string().optional().describe("Tax / VAT code (defaults to the tenant standard if omitted)."),
-  obsolete: external_exports.boolean().optional().default(false).describe("Mark obsolete on creation (default false).")
+  obsolete: external_exports.boolean().optional().default(false).describe("Mark obsolete on creation (default false)."),
+  allowDuplicate: external_exports.boolean().optional().default(false).describe(
+    "Suppress the manufacturer-reference duplicate guard. Default false: when manufacturerReference matches an existing product, the tool returns the existing code instead of creating a second SKU. Set true only for a genuine variant (same supplier code, different size/finish) where a duplicate is intentional."
+  )
 });
 var updateProductSchema = external_exports.object({
   productItemId: external_exports.string().describe("Product code / SKU (ProductItemId) to update."),
@@ -24748,6 +24804,32 @@ async function createProduct(args) {
       return "No productItemId supplied. Either pass productItemId, or set autoCode=true to auto-generate the next NC<DDMMYY><NN> code.";
     }
     code = await nextNcCode(client);
+  }
+  if (args.manufacturerReference && !args.allowDuplicate) {
+    const odataEscape = (s) => s.replace(/'/g, "''");
+    const refFilter = `ManufacturerReference eq '${odataEscape(args.manufacturerReference)}'`;
+    const mfrFilter = args.manufacturer ? ` and Manufacturer eq '${odataEscape(args.manufacturer)}'` : "";
+    const dupes = await client.get(
+      "ProductItems",
+      `$filter=${refFilter}${mfrFilter}&$select=ProductItemId,Description,DecimalSellingPrice,DecimalCostPrice,Manufacturer,ManufacturerReference,Obsolete&$top=3`
+    );
+    if (dupes.value.length > 0) {
+      const lines = dupes.value.map((p2) => {
+        const sell2 = typeof p2.DecimalSellingPrice === "number" ? `\xA3${p2.DecimalSellingPrice.toFixed(2)}` : "N/A";
+        const cost2 = typeof p2.DecimalCostPrice === "number" ? `\xA3${p2.DecimalCostPrice.toFixed(2)}` : "N/A";
+        const obsoleteTag = p2.Obsolete === 1 || p2.Obsolete === true ? " [OBSOLETE]" : "";
+        return `- **${p2.ProductItemId}**${obsoleteTag} \u2014 ${p2.Description}
+  Sell ${sell2} / Cost ${cost2} | Mfr: ${p2.Manufacturer ?? "N/A"} | Ref: ${p2.ManufacturerReference ?? "N/A"}`;
+      });
+      return [
+        `**duplicate: true** \u2014 a product with ManufacturerReference '${args.manufacturerReference}'${args.manufacturer ? ` (Manufacturer '${args.manufacturer}')` : ""} already exists.`,
+        "",
+        "Existing match(es):",
+        ...lines,
+        "",
+        "Use the existing code on the quote instead of creating a new one. If this is a genuine variant (same supplier code, different size/finish) and you really need a second SKU, re-run with `allowDuplicate: true`."
+      ].join("\n");
+    }
   }
   const existing = await client.get(
     "ProductItems",
@@ -24818,6 +24900,81 @@ async function updateProduct(args) {
   const keyExpr = `OperatingCompanyCode='${OPERATING_COMPANY_CODE3}',ProductItemId='${productItemId}'`;
   await client.patch("ProductItems", keyExpr, body);
   return `Product '${productItemId}' updated. Fields changed: ${Object.keys(body).join(", ")}`;
+}
+var PRODUCT_IMAGE_MAX_BYTES = 8 * 1024 * 1024;
+var ALLOWED_IMAGE_MIMES = /^image\/(jpe?g|png|gif|webp)$/i;
+function extFromMime2(mime) {
+  const m = mime.toLowerCase();
+  if (m.startsWith("image/jpeg") || m.startsWith("image/jpg")) return "jpg";
+  if (m.startsWith("image/png")) return "png";
+  if (m.startsWith("image/gif")) return "gif";
+  if (m.startsWith("image/webp")) return "webp";
+  return "bin";
+}
+var uploadProductImageSchema = external_exports.object({
+  productItemId: external_exports.string().describe("Product code / SKU (ProductItemId) to attach the image to, e.g. 'NC17062601'."),
+  imageUrl: external_exports.string().url().optional().describe(
+    "URL of the image to attach \u2014 the server fetches the bytes itself. Provide this OR imageBase64 (exactly one)."
+  ),
+  imageBase64: external_exports.string().optional().describe(
+    "Base64-encoded image bytes (no `data:` prefix). Provide this OR imageUrl (exactly one)."
+  ),
+  filename: external_exports.string().optional().describe(
+    "Optional filename (informational only \u2014 Prospect names the stored asset itself). Defaults to '<productItemId>.<ext>'."
+  ),
+  contentType: external_exports.string().optional().describe(
+    "MIME type, e.g. 'image/jpeg' or 'image/png'. Inferred from the fetched response / filename if omitted; falls back to 'image/jpeg'. Must be one of: image/jpeg, image/png, image/gif, image/webp."
+  )
+});
+async function uploadProductImage(args) {
+  const client = getClient();
+  const hasUrl = !!args.imageUrl;
+  const hasB64 = !!args.imageBase64;
+  if (hasUrl === hasB64) {
+    return "Provide exactly one of imageUrl or imageBase64.";
+  }
+  let bytes;
+  let contentType;
+  if (args.imageUrl) {
+    const res = await fetch(args.imageUrl);
+    if (!res.ok) {
+      return `Failed to fetch imageUrl: HTTP ${res.status} ${res.statusText} from ${args.imageUrl}`;
+    }
+    contentType = args.contentType || res.headers.get("content-type") || "image/jpeg";
+    bytes = Buffer.from(await res.arrayBuffer());
+  } else {
+    bytes = Buffer.from(args.imageBase64, "base64");
+    contentType = args.contentType || "image/jpeg";
+  }
+  contentType = contentType.split(";")[0].trim().toLowerCase();
+  if (!ALLOWED_IMAGE_MIMES.test(contentType)) {
+    return `Unsupported image type '${contentType}'. Allowed: image/jpeg, image/png, image/gif, image/webp.`;
+  }
+  if (bytes.length === 0) {
+    return "Image resolved to zero bytes \u2014 check the URL or base64 payload.";
+  }
+  if (bytes.length > PRODUCT_IMAGE_MAX_BYTES) {
+    return `Image is ${(bytes.length / 1024 / 1024).toFixed(2)} MB which exceeds the 8 MB cap \u2014 resize before upload.`;
+  }
+  const code = args.productItemId.replace(/'/g, "''");
+  const path2 = `ProductItems('${OPERATING_COMPANY_CODE3}','${code}')/UploadImage`;
+  let response;
+  try {
+    response = await client.postBinary(path2, bytes, contentType);
+  } catch (err) {
+    return `Image upload failed for '${args.productItemId}': ${err.message}`;
+  }
+  const responseNote = response == null ? "(server returned no body \u2014 image attached)" : `(server response: ${JSON.stringify(response).slice(0, 200)})`;
+  const sizeKb = (bytes.length / 1024).toFixed(1);
+  const filename = args.filename || `${args.productItemId}.${extFromMime2(contentType)}`;
+  return [
+    `Image uploaded to '${args.productItemId}'.`,
+    `**File:** ${filename} (${contentType}, ${sizeKb} KB)`,
+    `**Endpoint:** POST /${path2}`,
+    responseNote,
+    "",
+    "Verify in **Manage Images** on the product. The first image uploaded to a product is normally auto-primary in Prospect; if you need to change primary on a multi-image product, use the web UI for now (separate endpoint not yet wired)."
+  ].join("\n");
 }
 
 // src/tools/opportunities.ts
@@ -29472,6 +29629,7 @@ var TOOL_PERMISSION_MAP = {
   create_inventory: { module: "inventory", action: "create" },
   create_product: { module: "catalogue", action: "create" },
   update_product: { module: "catalogue", action: "edit" },
+  upload_product_image: { module: "catalogue", action: "edit" },
   update_inventory: { module: "inventory", action: "edit" },
   save_quoting_lesson: { module: "knowledge", action: "create" },
   save_product_note: { module: "knowledge", action: "create" },
@@ -31353,7 +31511,7 @@ server.tool(
 );
 registerWriteTool(
   "create_product",
-  "Create a new product (ProductItem) in the catalogue. Use for bespoke / non-catalogue (NC) items before they go on a quote. Pass productItemId, or omit it with autoCode=true to auto-generate the next NC<DDMMYY><NN> code. Requires description, sellPrice, costPrice.",
+  "Create a new product (ProductItem) in the catalogue. Use for bespoke / non-catalogue (NC) items before they go on a quote. Pass productItemId, or omit it with autoCode=true to auto-generate the next NC<DDMMYY><NN> code. Requires description, sellPrice, costPrice. Before inserting, the tool checks for an existing product with the same manufacturerReference (+ manufacturer when given) and short-circuits with `duplicate: true` + the existing code rather than creating a second SKU \u2014 set allowDuplicate=true only for a genuine variant.",
   createProductSchema.shape,
   async (args) => {
     try {
@@ -31366,11 +31524,24 @@ registerWriteTool(
 );
 registerWriteTool(
   "update_product",
-  "Update an existing product (ProductItem) \u2014 description, sell/cost price, supplier, references, obsolete flag.",
+  "Update an existing product (ProductItem) \u2014 description, supplier, references, obsolete flag. Note: sell/cost price and CategoryId are create-only on this entity (UpdateVisibility=never); use create_product (or the Prospect UI) to set those.",
   updateProductSchema.shape,
   async (args) => {
     try {
       const result = await updateProduct(updateProductSchema.parse(args));
+      return { content: [{ type: "text", text: result }] };
+    } catch (err) {
+      return { content: [{ type: "text", text: `Error: ${err.message}` }], isError: true };
+    }
+  }
+);
+registerWriteTool(
+  "upload_product_image",
+  "Attach an image to a ProductItem's Manage Images panel. Provide imageUrl (server fetches the bytes) OR imageBase64 (exactly one). Allowed types: image/jpeg, image/png, image/gif, image/webp; max 8 MB. The first image uploaded to a product becomes the primary/main image automatically \u2014 changing primary on a multi-image product needs the web UI for now (separate endpoint not yet wired).",
+  uploadProductImageSchema.shape,
+  async (args) => {
+    try {
+      const result = await uploadProductImage(uploadProductImageSchema.parse(args));
       return { content: [{ type: "text", text: result }] };
     } catch (err) {
       return { content: [{ type: "text", text: `Error: ${err.message}` }], isError: true };
