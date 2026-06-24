@@ -79,6 +79,39 @@
       "writeAllow": "",
       "permissions": {},
       "notes": "Purchasing Administrator"
+    },
+    "AR": {
+      "name": "Adam Rowley",
+      "writeAllow": "quotes,contacts,opportunities,inventory,knowledge,notes,catalogue",
+      "permissions": {
+        "quotes": {
+          "create": true,
+          "edit": true
+        },
+        "contacts": {
+          "create": true,
+          "edit": true
+        },
+        "opportunities": {
+          "create": true,
+          "edit": true
+        },
+        "inventory": {
+          "create": true,
+          "edit": true
+        },
+        "knowledge": {
+          "create": true
+        },
+        "notes": {
+          "create": true
+        },
+        "catalogue": {
+          "create": true,
+          "edit": true
+        }
+      },
+      "notes": ""
     }
   },
   "defaults": {
