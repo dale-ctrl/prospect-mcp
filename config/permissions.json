@@ -82,7 +82,7 @@
     },
     "AR": {
       "name": "Adam Rowley",
-      "writeAllow": "quotes,contacts,opportunities,inventory,knowledge,notes,catalogue",
+      "writeAllow": "quotes,contacts,opportunities,inventory,knowledge,notes,catalogue,messaging",
       "permissions": {
         "quotes": {
           "create": true,
@@ -109,9 +109,12 @@
         "catalogue": {
           "create": true,
           "edit": true
+        },
+        "messaging": {
+          "send": true
         }
       },
-      "notes": ""
+      "notes": "messaging.send opt-in granted 2026-06-26 so the connector can merge quotes to PDF via send_quote_email; safety gate forces emailTo to the API user."
     }
   },
   "defaults": {
