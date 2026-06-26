@@ -82,7 +82,7 @@
     },
     "AR": {
       "name": "Adam Rowley",
-      "writeAllow": "quotes,contacts,opportunities,enquiries,inventory,knowledge,notes,catalogue",
+      "writeAllow": "quotes,contacts,opportunities,inventory,knowledge,notes,catalogue",
       "permissions": {
         "quotes": {
           "create": true,
@@ -93,10 +93,6 @@
           "edit": true
         },
         "opportunities": {
-          "create": true,
-          "edit": true
-        },
-        "enquiries": {
           "create": true,
           "edit": true
         },
