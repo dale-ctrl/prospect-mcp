@@ -75,11 +75,13 @@ export declare const sendQuoteEmailSchema: z.ZodObject<{
     emailTemplateCode: z.ZodDefault<z.ZodOptional<z.ZodString>>;
     quoteTemplateCode: z.ZodDefault<z.ZodOptional<z.ZodString>>;
     attachPdf: z.ZodDefault<z.ZodOptional<z.ZodBoolean>>;
+    attachmentNameTemplate: z.ZodDefault<z.ZodOptional<z.ZodString>>;
 }, "strip", z.ZodTypeAny, {
     quoteId: number;
     emailTemplateCode: string;
     quoteTemplateCode: string;
     attachPdf: boolean;
+    attachmentNameTemplate: string;
     cc?: string | undefined;
     subject?: string | undefined;
     to?: string | undefined;
@@ -95,6 +97,7 @@ export declare const sendQuoteEmailSchema: z.ZodObject<{
     messageBody?: string | undefined;
     quoteTemplateCode?: string | undefined;
     attachPdf?: boolean | undefined;
+    attachmentNameTemplate?: string | undefined;
 }>;
 export declare const listQuoteTemplatesSchema: z.ZodObject<{
     kind: z.ZodDefault<z.ZodOptional<z.ZodEnum<["email", "pdf", "all"]>>>;

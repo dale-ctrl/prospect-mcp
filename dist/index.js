@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// prospect-crm-mcp v1.26.0 — bundled by esbuild on 2026-06-26T13:51:30.380Z
+// prospect-crm-mcp v1.27.0 — bundled by esbuild on 2026-06-26T15:26:36.212Z
 // Single-file MCP server; no node_modules required at runtime.
 var __create = Object.create;
 var __defProp = Object.defineProperty;
@@ -24146,7 +24146,10 @@ var sendQuoteEmailSchema = external_exports.object({
   messageBody: external_exports.string().optional().describe("Email body as HTML. If omitted, rendered from the email template + the user's signature."),
   emailTemplateCode: external_exports.string().optional().default("_EMLQC").describe("DocumentTypeCode of the email template (DocumentTemplates where AllowAtQuote=1). Defaults to '_EMLQC'."),
   quoteTemplateCode: external_exports.string().optional().default("_QUOTE").describe("DocumentTypeCode of the PDF template attached to the email. Defaults to '_QUOTE'. Ignored when attachPdf=false."),
-  attachPdf: external_exports.boolean().optional().default(true).describe("Whether to generate and attach the quote PDF. Defaults to true.")
+  attachPdf: external_exports.boolean().optional().default(true).describe("Whether to generate and attach the quote PDF. Defaults to true."),
+  attachmentNameTemplate: external_exports.string().optional().default("{Division.Name} - {Description} - {Lead.LeadId} - {QuoteId}").describe(
+    "Template for the PDF attachment filename (the part before `.pdf`). Standard Prospect MergeData placeholders work, including dot-path navigation: `{QuoteId}`, `{Description}`, `{Division.Name}`, `{Lead.LeadId}`, etc. \u2014 same syntax as the document-template settings in the Prospect UI. The server resolves the placeholders against the quote's joined data, then `.pdf` is appended. Default matches WCG's standard document-template pattern. Pass a different string to override per-call."
+  )
 });
 var listQuoteTemplatesSchema = external_exports.object({
   kind: external_exports.enum(["email", "pdf", "all"]).optional().default("all").describe("Filter: 'email' = cover-email templates (Email=1), 'pdf' = quote-document templates (Email=0), 'all' = both (default).")
@@ -24224,7 +24227,7 @@ async function sendQuoteEmail(input) {
     subject: args.subject,
     messageBody: args.messageBody,
     emailTemplateCode: args.emailTemplateCode,
-    attachment: args.attachPdf ? { documentTemplateCode: args.quoteTemplateCode, documentNameTemplate: `Quote Document {QuoteId}` } : void 0,
+    attachment: args.attachPdf ? { documentTemplateCode: args.quoteTemplateCode, documentNameTemplate: args.attachmentNameTemplate } : void 0,
     defaultToResolver: resolveContactEmail
   });
   let sentAt = null;
@@ -31641,7 +31644,7 @@ server.tool(
 );
 registerWriteTool(
   "send_quote_email",
-  "Send a quote by email. SAFETY: this MCP can only email quotes back to the authenticated API user \u2014 never to customers, CCs, or BCCs. The to/cc/bcc parameters are accepted for compatibility but are ignored. To email a customer, use the ProspectCRM UI. Replicates the 7-call flow Prospect's own UI uses (MergeData \xD7 3, Documents POST for the PDF shell, DocumentAttachments/AttachExistingDocument to stage it, SendMessage). All inputs optional except quoteId \u2014 `subject`/`messageBody` render from the email template if omitted, `emailTemplateCode` defaults to '_EMLQC', `quoteTemplateCode` defaults to '_QUOTE'. If the user asks for a specific template (e.g. 'the Education template', 'the Versa Wall Pocket one'), call list_quote_templates first to find the matching DocumentTypeCode, then pass it via quoteTemplateCode (or emailTemplateCode for cover-email variants). Set attachPdf=false for body-only email. Returns the sent-email DocumentId + the attachment DocumentId \u2014 feed the latter to get_merge_output to retrieve the source document.",
+  "Send a quote by email. SAFETY: this MCP can only email quotes back to the authenticated API user \u2014 never to customers, CCs, or BCCs. The to/cc/bcc parameters are accepted for compatibility but are ignored. To email a customer, use the ProspectCRM UI. Replicates the 7-call flow Prospect's own UI uses (MergeData \xD7 3, Documents POST for the PDF shell, DocumentAttachments/AttachExistingDocument to stage it, SendMessage). All inputs optional except quoteId \u2014 `subject`/`messageBody` render from the email template if omitted, `emailTemplateCode` defaults to '_EMLQC', `quoteTemplateCode` defaults to '_QUOTE'. The PDF attachment filename is built from `attachmentNameTemplate`, which defaults to `{Division.Name} - {Description} - {Lead.LeadId} - {QuoteId}` (matching WCG's document-template settings) \u2014 pass a different string to override per-call. If the user asks for a specific template (e.g. 'the Education template', 'the Versa Wall Pocket one'), call list_quote_templates first to find the matching DocumentTypeCode, then pass it via quoteTemplateCode (or emailTemplateCode for cover-email variants). Set attachPdf=false for body-only email. Returns the sent-email DocumentId + the attachment DocumentId \u2014 feed the latter to get_merge_output to retrieve the source document.",
   sendQuoteEmailSchema.shape,
   async (args) => {
     try {

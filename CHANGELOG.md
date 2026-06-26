@@ -6,6 +6,19 @@ The format is based on Keep a Changelog, and this project adheres to Semantic Ve
 
 ## [Unreleased]
 
+## [1.27.0] - 2026-06-26
+### Changed — `send_quote_email`: PDF attachment filename now matches WCG document-template pattern
+
+Pre-v1.27.0, `send_quote_email` hardcoded the PDF attachment filename template as `"Quote Document {QuoteId}"`, which Prospect's `MergeData` action resolved to e.g. `Quote Document 15782.pdf` — fine for one-off testing, not useful for the team's quoting workflow where attachment names need to surface the customer and the linked opportunity.
+
+- **New default**: `{Division.Name} - {Description} - {Lead.LeadId} - {QuoteId}` — same syntax as the document-template settings in the Prospect UI, including dot-path navigation across FKs (`Division.Name` from `DivisionId`, `Lead.LeadId` from `LeadId`). The server's `MergeData` action resolves the placeholders against the quote's joined data exactly as it does for UI-configured templates, then `.pdf` is appended.
+- **New per-call argument**: `attachmentNameTemplate` (string, optional) on `sendQuoteEmailSchema`. Pass any Prospect template string to override the default for one call — useful if a specific job needs a different filename convention. Omit to get the WCG default.
+- **No change to send semantics**: still gated by the `messaging.send` permission, still routes through the safety gate that forces `emailTo` to the API user. Filename is the only thing this release changes; the underlying 7-call flow (`MergeData × 3` → `Documents` POST → `DocumentAttachments/AttachExistingDocument` → `SendMessage`) is untouched.
+
+Notes:
+- If a quote has no linked Lead, `{Lead.LeadId}` resolves to empty and the filename ends up with a double dash (e.g. `"Foo Ltd - Description -  - 12345.pdf"`). Same behaviour you'd see in the Prospect UI with the same template — no special handling added.
+- Tool description in `src/index.ts` updated to document the new argument and the default pattern.
+
 ## [1.26.0] - 2026-06-26
 ### Changed — `versa-maintenance-contracts-bulk` skill: equipment list now one-line-per-item
 

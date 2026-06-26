@@ -437,6 +437,13 @@ export const sendQuoteEmailSchema = z.object({
   emailTemplateCode: z.string().optional().default("_EMLQC").describe("DocumentTypeCode of the email template (DocumentTemplates where AllowAtQuote=1). Defaults to '_EMLQC'."),
   quoteTemplateCode: z.string().optional().default("_QUOTE").describe("DocumentTypeCode of the PDF template attached to the email. Defaults to '_QUOTE'. Ignored when attachPdf=false."),
   attachPdf: z.boolean().optional().default(true).describe("Whether to generate and attach the quote PDF. Defaults to true."),
+  attachmentNameTemplate: z
+    .string()
+    .optional()
+    .default("{Division.Name} - {Description} - {Lead.LeadId} - {QuoteId}")
+    .describe(
+      "Template for the PDF attachment filename (the part before `.pdf`). Standard Prospect MergeData placeholders work, including dot-path navigation: `{QuoteId}`, `{Description}`, `{Division.Name}`, `{Lead.LeadId}`, etc. — same syntax as the document-template settings in the Prospect UI. The server resolves the placeholders against the quote's joined data, then `.pdf` is appended. Default matches WCG's standard document-template pattern. Pass a different string to override per-call.",
+    ),
 });
 
 export const listQuoteTemplatesSchema = z.object({
@@ -551,7 +558,7 @@ export async function sendQuoteEmail(
     messageBody: args.messageBody,
     emailTemplateCode: args.emailTemplateCode,
     attachment: args.attachPdf
-      ? { documentTemplateCode: args.quoteTemplateCode, documentNameTemplate: `Quote Document {QuoteId}` }
+      ? { documentTemplateCode: args.quoteTemplateCode, documentNameTemplate: args.attachmentNameTemplate }
       : undefined,
     defaultToResolver: resolveContactEmail,
   });
