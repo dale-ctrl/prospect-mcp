@@ -6,6 +6,32 @@ The format is based on Keep a Changelog, and this project adheres to Semantic Ve
 
 ## [Unreleased]
 
+## [1.26.0] - 2026-06-26
+### Changed — `versa-maintenance-contracts-bulk` skill: equipment list now one-line-per-item
+
+Docs-only release. The Versa Maintenance Contracts skill previously instructed callers to comma-separate mixed equipment on one site (`"5x Mobile Tables, 2x Single Pockets"`). Switched to one-line-per-item, with two wire formats that must stay in sync.
+
+#### CRM side
+`equipmentMaintained` passed to `update_division_versa_maintenance` is now a **newline-joined multi-line string** (`"5x Mobile Tables\n2x Single Pockets"`), so each quantity/description lands on a separate line in `DivisionXtra.StandardTextField5`. The CRM textarea preserves `\n` as a visible line break. Single-item contracts pass a single line with no trailing newline as before.
+
+#### Contract docx side
+The equipment value lands in `table[0]` cell `[4,1]` — a single Word table cell. **A bare `\n` inside a `<w:t>` XML text node is just whitespace, NOT a line break**, and would collapse multi-item equipment onto one line with a space between items. `build_replacements()` in Step 3 now transforms the equipment target string by replacing each `\n` with the in-paragraph Word line-break sequence `</w:t><w:br/><w:t>` (close run text, emit `<w:br/>`, reopen) so multiple items render as separate lines within that single cell:
+
+```
+<w:t>5x Mobile Tables</w:t><w:br/><w:t>2x Single Pockets</w:t>
+```
+
+Only the equipment replacement gets this XML transform — every other pair (client name, tel, address lines, cost) stays plain text.
+
+#### Other changes
+- Business rules updated with a fenced code-block example of the new format.
+- Step 2 example call updated to pass the newline-joined string + an explanatory note.
+- Step 3 gets a callout box explaining why bare `\n` doesn't work and what `<w:br/>` looks like in the rendered run.
+- Changelog entry added at the top, dated 2026-06-26.
+
+#### Untouched
+Pricing rules (£42 per Mobile Table / £81 / £105 / £125 / £140 for Wall Pocket Single–Quad / £336 per-visit minimum) and all `max(subtotal, 336.00)` worked examples remain unchanged. No tool code changed.
+
 ## [1.25.0] - 2026-06-22
 ### Changed — `prospect-crm-create-product` skill v2.1 (image-search refinements from live testing)
 

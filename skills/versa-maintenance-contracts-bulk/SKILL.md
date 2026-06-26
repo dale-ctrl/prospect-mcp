@@ -106,8 +106,19 @@ both fields populated, 20+ existing merged contracts on file.
   `"Nx Triple Pockets"`, `"Nx Quad Pockets"`. If the user specifies a
   brand (Benchmark, Spaceright, or Sico), include it in the string,
   e.g. `"Nx Versa Benchmark Tables"`. Pricing is the same for any
-  Mobile Table brand. For mixed equipment on one site, comma-separate:
-  `"5x Mobile Tables, 2x Single Pockets"`.
+  Mobile Table brand. For mixed equipment on one site, put each
+  quantity/description on its **own line** (newline-separated, NOT
+  comma-separated):
+
+  ```
+  5x Mobile Tables
+  2x Single Pockets
+  ```
+
+  i.e. join items with `\n` — `"5x Mobile Tables\n2x Single Pockets"`.
+  This lands as separate lines in the CRM Versa field AND as separate
+  lines inside the contract's equipment cell (see Step 2 + Step 3 for
+  the wire formats).
 - **Total value format.** Pass to MCP as a STRING with two decimal places,
   e.g. `"294.00"`. JSON serialisation drops trailing zeros if you pass a
   number (`280` becomes `"280"`, not `"280.00"`).
@@ -263,10 +274,16 @@ Then call:
 ```
 update_division_versa_maintenance({
   divisionId: <id>,
-  equipmentMaintained: "Nx Mobile Tables",   # or appropriate equipment string
-  totalMaintenanceValue: "X.00"               # STRING, 2dp, no currency symbol
+  equipmentMaintained: "5x Mobile Tables\n2x Single Pockets",   # newline-joined multi-line string
+  totalMaintenanceValue: "X.00"                                  # STRING, 2dp, no currency symbol
 })
 ```
+
+**`equipmentMaintained` must be the newline-joined multi-line string**
+(items separated by `\n`, not commas) so each quantity/description lands
+on its own line in `DivisionXtra.StandardTextField5`. The CRM textarea
+preserves the `\n`s as visible line breaks. For a single-item contract,
+pass a single line with no trailing newline, e.g. `"9x Mobile Tables"`.
 
 ### 3. Produce the merged docx (client-side)
 
@@ -353,10 +370,15 @@ def build_replacements(detected, target):
     specific strings first, so a substring collision (e.g. detected
     client name appearing inside an address line) can't bite later
     replacements.
+
+    The equipment value is XML-encoded with in-paragraph Word line breaks
+    (</w:t><w:br/><w:t>) for each newline so multi-item contracts render
+    as separate lines inside the equipment cell. See the callout below.
     """
     pairs = [
         (detected['client_name'], target['client_name']),    # MUST be first
-        (detected['equipment'],   target['equipment']),
+        (detected['equipment'],   target['equipment'].replace(
+            '\n', '</w:t><w:br/><w:t>')),
         (detected['tel_no'],      target['tel_no']),
         (detected['cost'],        f"{target['total_value']:.2f}"),
     ]
@@ -369,6 +391,30 @@ def build_replacements(detected, target):
     pairs.extend(zip(src_addr, dst_addr))
     return pairs
 ```
+
+**Equipment cell — inject `<w:br/>` for each line, NOT a bare `\n`.**
+The equipment value lands in `table[0]` cell `[4,1]` — a single Word
+table cell. The target string from Step 2 is multi-line
+(`"5x Mobile Tables\n2x Single Pockets"`), but **a bare `\n` inside an
+XML `<w:t>` text node will NOT produce a visible line break in the
+rendered docx** — to Word it's just whitespace. The cell will collapse
+both items onto one line with a space between them.
+
+Word's in-paragraph line break is the `<w:br/>` element, which has to
+sit BETWEEN run-text elements: close the source `<w:t>`, emit `<w:br/>`,
+reopen `<w:t>`. The equipment-pair line in `build_replacements()` above
+does exactly that — each `\n` becomes `</w:t><w:br/><w:t>` before the
+string is fed into `xml.replace(old, new, 1)`. The final inserted run
+ends up looking like:
+
+```
+<w:t>5x Mobile Tables</w:t><w:br/><w:t>2x Single Pockets</w:t>
+```
+
+which Word renders as two lines inside the same paragraph (and the same
+cell). Only the **equipment** replacement needs this transform — every
+other detected/target pair (client name, tel, address lines, cost) is
+single-line plain text and stays as-is.
 
 **Watch for transient duplicates in REPLACEMENTS.** Some detected
 source strings appear twice in the XML *until* an earlier replacement
@@ -680,6 +726,23 @@ callers cannot directly email customers. Workflow is always:
 
 ## Changelog
 
+- 2026-06-26: Equipment formatting switched from comma-separated to
+  one-line-per-item. Two layers, must be kept in sync:
+  (a) **CRM side** — `equipmentMaintained` passed to
+  `update_division_versa_maintenance` is now a newline-joined multi-line
+  string (`"5x Mobile Tables\n2x Single Pockets"`), so each item lands on
+  a separate line in `DivisionXtra.StandardTextField5`. The CRM textarea
+  preserves `\n` as a visible line break.
+  (b) **Contract docx side** — the equipment cell is `table[0]` cell
+  `[4,1]`, a single Word table cell. A bare `\n` inside a `<w:t>` XML
+  text node is just whitespace, NOT a line break, and would collapse
+  multi-item equipment onto one line. `build_replacements()` in Step 3
+  now converts each `\n` in `target['equipment']` to the in-paragraph
+  Word line-break sequence `</w:t><w:br/><w:t>` (close run text, emit
+  `<w:br/>`, reopen) so multiple items render as separate lines within
+  that single cell. Only the equipment pair gets this transform — every
+  other replacement stays plain text. Pricing rules (£42 / £81–140 /
+  £336 minimum) unchanged.
 - 2026-05-06: Initial skill from session retrospective. Captured the
   contact-bypass pivot ("I just want the requirement to have a contact
   removed completely from this exercise"), the Wimbledon-template-as-source-
