@@ -108,6 +108,7 @@ import {
   createProductSchema, createProduct,
   updateProductSchema, updateProduct,
   uploadProductImageSchema, uploadProductImage,
+  updateProductXtraSchema, updateProductXtra,
 } from "./tools/products.js";
 
 import {
@@ -505,6 +506,7 @@ const TOOL_PERMISSION_MAP: Record<string, { module: string; action: string }> = 
   create_product: { module: "catalogue", action: "create" },
   update_product: { module: "catalogue", action: "edit" },
   upload_product_image: { module: "catalogue", action: "edit" },
+  update_product_xtra: { module: "catalogue", action: "edit" },
   update_inventory: { module: "inventory", action: "edit" },
   save_quoting_lesson: { module: "knowledge", action: "create" },
   save_product_note: { module: "knowledge", action: "create" },
@@ -2177,6 +2179,11 @@ registerWriteTool("upload_product_image",
   "Attach an image to a ProductItem's Manage Images panel. Provide imageUrl (server fetches the bytes) OR imageBase64 (exactly one). Allowed types: image/jpeg, image/png, image/gif, image/webp; max 8 MB. The first image uploaded to a product becomes the primary/main image automatically — changing primary on a multi-image product needs the web UI for now (separate endpoint not yet wired).",
   uploadProductImageSchema.shape,
   async (args) => { try { const result = await uploadProductImage(uploadProductImageSchema.parse(args)); return { content: [{ type: "text" as const, text: result }] }; } catch (err) { return { content: [{ type: "text" as const, text: `Error: ${(err as Error).message}` }], isError: true }; } });
+
+registerWriteTool("update_product_xtra",
+  "Write ProductItemXtra custom fields on a ProductItem — Dimensions, Supplier, Supplier Code, Colour, etc. (whatever the tenant has configured under 'Custom Fields' on a product). Fields can be keyed by friendly label ('Dimensions'), slot identifier ('StandardMemoField2'), or raw column ('x_365_custom_memo_2'). Pass null to clear a slot. Upserts the ProductItemXtra row if it doesn't exist yet. Composite-key entity — uses (OperatingCompanyCode='A', ProductItemId='<code>') for PATCH/POST, same shape as update_product. Use get_xtra_fields(entityType='ProductItemXtras', parentId='<productItemId>') first to discover the configured slots and labels for this tenant.",
+  updateProductXtraSchema.shape,
+  async (args) => { try { const result = await updateProductXtra(updateProductXtraSchema.parse(args)); return { content: [{ type: "text" as const, text: result }] }; } catch (err) { return { content: [{ type: "text" as const, text: `Error: ${(err as Error).message}` }], isError: true }; } });
 
 // ─── Gap Fix: Division RFM & Profiling ───────────────────────
 

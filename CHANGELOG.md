@@ -6,6 +6,35 @@ The format is based on Keep a Changelog, and this project adheres to Semantic Ve
 
 ## [Unreleased]
 
+## [1.28.0] - 2026-06-30
+### Added — ProductItemXtra read + write (`get_xtra_fields` extension + `update_product_xtra`)
+
+Closes the gap on product-level custom fields. Pre-v1.28.0 the connector could read/write Xtra fields for Quote, QuoteLine, Division, Contact, Lead, Campaign, Booking, and Contract — but not for ProductItem. So fields like a product's **Dimensions** (a ProductItemXtra slot) could only be set via the Prospect web UI.
+
+#### New: `update_product_xtra` MCP tool
+Generic writer for ProductItemXtra custom fields. Counterpart to `update_division_xtra` (v1.20.0) and the `update_quote_line_xtra` branch.
+
+- **Schema**: `productItemId` (string, required) + `fields` object. Field keys accept friendly label (`"Dimensions"`), slot identifier (`"StandardTextField1"`), or raw column (`"x_365_custom_text_1"`). Pass `null` to clear a slot. Same multi-form contract as the other Xtra writers.
+- **Entity confirmed via $metadata** (line 10302): `ProductItemXtras`, composite primary key `(OperatingCompanyCode, ProductItemId)` — same shape as ProductItem itself. PATCH/GET-by-id use the full key URL `ProductItemXtras(OperatingCompanyCode='A',ProductItemId='<code>')`; the single-string-key form returns HTTP 500 on this tenant, same quirk as ProductItem (resolved v1.22.0).
+- **Slot inventory**: 10 text, 5 memo, 5 dropdown, 5 date, 5 decimal, 5 flag, 3 search-text = 38 slots. All `meta:UpdateVisibility="common"` — direct PATCH works. No computed-field quirks like the price-storage situation on ProductItem itself.
+- **Friendly labels resolved live** from the tenant's `Translations` table via the shared `loadXtraSlots` helper in `lib/xtra-labels.ts` — same machinery the other Xtra writers use. The new entity was added to `ENTITY_ID_BY_SET` (one line in `xtra-labels.ts`); no other resolver changes needed.
+- **Upsert (POST-on-404)** path mirrors `upsertDivisionXtra`: PATCH the composite-key URL, fall back to POSTing `{OperatingCompanyCode, ProductItemId, ...body}`. On this tenant Prospect auto-creates a ProductItemXtra row alongside every ProductItem so the PATCH always succeeds and the POST fallback never fires in practice — but the path is sound by construction (mirrors v1.22.0's working `create_product` POST body shape).
+- **Permission map**: `update_product_xtra: { module: "catalogue", action: "edit" }`. Reuses the catalogue/edit grant added in v1.21.0; no `config/permissions.json` change.
+
+#### Extended: `get_xtra_fields`
+`entityType` enum now includes `"ProductItemXtras"`. `parentId` is the ProductItemId STRING (distinct from the integer parent IDs every other Xtra entity uses); the `$filter` clause now single-quotes string parent IDs and OData-escapes embedded apostrophes (without breaking the existing integer-parent path).
+
+#### Live smoke test (NC30062602 — "Tall Cupboard 1000w x 500d x 2200h")
+- Read path: `get_xtra_fields(entityType='ProductItemXtras', parentId='NC30062602')` returned 38 configured slots with the tenant's friendly labels populated:
+  - `StandardTextField1` → **Dimensions**
+  - `StandardMemoField1` → **Ext Product Item Description**
+  - `StandardSearchTextField1` → **Image**
+- Write path: `update_product_xtra(productItemId="NC30062602", fields={"Dimensions": "1000mm W x 500mm D x 2200mm H"})` resolved the friendly label to `StandardTextField1` and PATCHed the composite-key URL successfully. Read-back confirms persistence.
+- Upsert: across 50 most-recent NC products, every one already had an Xtra row — Prospect auto-creates them. The fallback POST didn't fire in this smoke test, but the body shape matches v1.22.0's confirmed-working `create_product` POST.
+
+#### Skill update
+`skills/prospect-crm-create-product/SKILL.md` → v2.2 — added §4a "Populate Dimensions (and other ProductItemXtra fields)" documenting the new tool and the standard WCG dimension format `"<W>mm W x <D>mm D x <H>mm H"` (width first, depth second, height third). Added §7d under "The MCP tools that back this skill" describing the entity, the composite-key URL form, and the tenant's confirmed friendly-label mapping.
+
 ## [1.27.0] - 2026-06-26
 ### Changed — `send_quote_email`: PDF attachment filename now matches WCG document-template pattern
 

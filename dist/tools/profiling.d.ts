@@ -11,13 +11,13 @@ export declare const getDivisionRfmSchema: z.ZodObject<{
     divisionId: number;
 }>;
 export declare const getXtraFieldsSchema: z.ZodObject<{
-    entityType: z.ZodEnum<["QuoteXtras", "ContactXtras", "DivisionXtras", "LeadXtras", "CampaignXtras", "BookingXtras", "ContractXtras", "QuoteLineXtras"]>;
+    entityType: z.ZodEnum<["QuoteXtras", "ContactXtras", "DivisionXtras", "LeadXtras", "CampaignXtras", "BookingXtras", "ContractXtras", "QuoteLineXtras", "ProductItemXtras"]>;
     parentId: z.ZodUnion<[z.ZodNumber, z.ZodString]>;
 }, "strip", z.ZodTypeAny, {
-    entityType: "QuoteLineXtras" | "QuoteXtras" | "ContactXtras" | "DivisionXtras" | "LeadXtras" | "CampaignXtras" | "BookingXtras" | "ContractXtras";
+    entityType: "QuoteLineXtras" | "QuoteXtras" | "ContactXtras" | "DivisionXtras" | "LeadXtras" | "CampaignXtras" | "BookingXtras" | "ContractXtras" | "ProductItemXtras";
     parentId: string | number;
 }, {
-    entityType: "QuoteLineXtras" | "QuoteXtras" | "ContactXtras" | "DivisionXtras" | "LeadXtras" | "CampaignXtras" | "BookingXtras" | "ContractXtras";
+    entityType: "QuoteLineXtras" | "QuoteXtras" | "ContactXtras" | "DivisionXtras" | "LeadXtras" | "CampaignXtras" | "BookingXtras" | "ContractXtras" | "ProductItemXtras";
     parentId: string | number;
 }>;
 export declare const getContactProfilingSchema: z.ZodObject<{

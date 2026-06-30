@@ -156,7 +156,58 @@ After creating, `get_product_detail(productItemId="NC17062601")` and confirm sel
 persisted.
 
 **Interim — if `create_product` is not yet deployed:** create the item in the Prospect web UI
-(Products → New), entering the same fields, OR have the estimator create it. Then proceed to §5.
+(Products → New), entering the same fields, OR have the estimator create it. Then proceed to §4a.
+
+## 4a. Populate Dimensions (and other ProductItemXtra fields)
+
+The product's **Dimensions** field — and any other "Custom Fields" the tenant has configured on a
+ProductItem (Supplier, Supplier Code, Ext Product Item Description, etc.) — lives on the separate
+`ProductItemXtra` row that Prospect auto-creates alongside every ProductItem. As of v1.28.0 these
+are writable via the `update_product_xtra` MCP tool.
+
+**Standard WCG dimension format**: `"<W>mm W x <D>mm D x <H>mm H"` — e.g.
+`"1000mm W x 500mm D x 2200mm H"` for a tall cupboard. Always use this format so dimensions render
+consistently on quotes and exports. Width first, depth second, height third.
+
+```
+update_product_xtra(
+  productItemId="NC17062601",
+  fields={
+    "Dimensions": "1000mm W x 500mm D x 2200mm H"
+    # Other configured slots can go here too, e.g.:
+    # "Supplier": "Hawk Furniture",
+    # "Supplier Code": "WESTCOUNTRY-31797",
+  }
+)
+```
+
+Field keys can be the **friendly label** as configured in the tenant (recommended — e.g.
+`"Dimensions"`), the slot identifier (`"StandardTextField1"`), or the raw column
+(`"x_365_custom_text_1"`). Pass `null` to clear a slot. The tool upserts the Xtra row if one
+doesn't exist (defensive — in practice Prospect auto-creates ProductItemXtra alongside the
+ProductItem so the row is always present).
+
+To discover what custom fields the tenant has configured for a product (and which slot each
+friendly label maps to), call:
+
+```
+get_xtra_fields(entityType="ProductItemXtras", parentId="NC17062601")
+```
+
+That lists every configured slot, its friendly label (when the tenant has set one), and any
+currently-stored value. On the current WCG tenant the labels are:
+- `StandardTextField1` → **Dimensions**
+- `StandardMemoField1` → **Ext Product Item Description**
+- `StandardSearchTextField1` → **Image**
+
+After writing, confirm via `get_xtra_fields(...)` or open the product in the Prospect UI under
+the Custom Fields tab.
+
+> **Why `update_product_xtra` and not `update_product`?** `update_product` writes the
+> ProductItem row itself (Description, Manufacturer, Obsolete flag, etc.). Custom fields live on a
+> separate `ProductItemXtra` row keyed off the same composite primary key
+> (OperatingCompanyCode + ProductItemId) — different table, different OData entity set,
+> separate write call.
 
 ## 5. Find and attach a product image (Manage Images)
 
@@ -316,6 +367,34 @@ Third write handler in `src/tools/products.ts` for attaching an image to **Manag
   follow-up release. Prospect's `UploadImage` endpoint takes raw bytes only — there's nowhere to
   send a caption, so the field isn't accepted.
 
+### 7d. `update_product_xtra` + `get_xtra_fields` ProductItemXtras branch (v1.28.0)
+Generic writer for ProductItemXtra custom fields (Dimensions, Supplier, Supplier Code, …) — the
+fields the tenant configures under "Custom Fields" on a ProductItem. Counterpart to
+`update_division_xtra` and `update_quote_line_xtra`. Used by §4a above.
+
+- **Entity** (confirmed in $metadata, line 10302): `ProductItemXtras`, composite primary key
+  `(OperatingCompanyCode, ProductItemId)` — same shape as ProductItem. PATCH/GET-by-id use the
+  full key URL `ProductItemXtras(OperatingCompanyCode='A',ProductItemId='<code>')`. The
+  single-string-key form returns HTTP 500 on this tenant, same quirk as ProductItem itself
+  (resolved v1.22.0).
+- **Slot inventory**: 10 text, 5 memo, 5 dropdown, 5 date, 5 decimal, 5 flag, 3 search-text = 38
+  slots. All `meta:UpdateVisibility="common"` — direct PATCH works; no computed-field quirks like
+  the price-storage situation on ProductItem itself.
+- **Friendly labels** are resolved live from the tenant's `Translations` table via the shared
+  `loadXtraSlots` helper in `lib/xtra-labels.ts`. Current WCG mapping: `StandardTextField1` →
+  Dimensions, `StandardMemoField1` → Ext Product Item Description, `StandardSearchTextField1` →
+  Image. Other slots are unlabelled on this tenant; writes by identifier or column still work.
+- **`get_xtra_fields(entityType='ProductItemXtras', parentId='<code>')`** — added in v1.28.0;
+  `parentId` is the ProductItemId STRING (single-quoted in the filter), distinct from the integer
+  parent IDs every other Xtra entity uses.
+- **Upsert (POST-on-404)** — defensive code, but in practice never fires on this tenant: Prospect
+  auto-creates a ProductItemXtra row alongside every ProductItem, so the initial PATCH always
+  succeeds. The POST fallback's body shape (with `OperatingCompanyCode` + `ProductItemId` in the
+  body) mirrors v1.22.0's working `create_product` POST, so the path is sound by construction
+  even if no live tenant exercises it.
+- **Permission map** — `update_product_xtra: { module: "catalogue", action: "edit" }`. Reuses
+  the catalogue/edit grant added in v1.21.0; no `config/permissions.json` change.
+
 ## Pitfalls
 - **Create-before-checking** — the §1 duplicate search is mandatory. Same item + same manufacturer
   reference = reuse the existing SKU, never a second one.
@@ -339,6 +418,15 @@ Third write handler in `src/tools/products.ts` for attaching an image to **Manag
   rendered pages). No curl/wget/archive mirrors.
 
 ## Changelog
+- **2026-06-30 (v2.2)** — Added §4a "Populate Dimensions (and other ProductItemXtra fields)"
+  documenting the new `update_product_xtra` MCP tool (v1.28.0). Standard WCG dimension format
+  is `"<W>mm W x <D>mm D x <H>mm H"` — width first, depth second, height third. Custom-field
+  keys can be passed as friendly label ("Dimensions"), slot identifier ("StandardTextField1"),
+  or raw column ("x_365_custom_text_1"); pass `null` to clear. `get_xtra_fields` extended with
+  `ProductItemXtras` parentId-as-string. Tenant friendly-label mapping verified against
+  NC30062602 ("Tall Cupboard 1000w x 500d x 2200h"): Dimensions → StandardTextField1,
+  Ext Product Item Description → StandardMemoField1, Image → StandardSearchTextField1.
+  Section §7d added under "The MCP tools that back this skill".
 - **2026-06-22 (v2.1)** — Refinements from live testing: present candidates as clickable source
   URLs (the preview widget only loads allowlisted-CDN images, so supplier-domain previews render
   blank); grab the full-size image not a tiny cached thumbnail (4.9 KB thumb vs 321 KB proper

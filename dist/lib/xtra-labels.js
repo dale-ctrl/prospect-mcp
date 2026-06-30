@@ -36,6 +36,7 @@ const ENTITY_ID_BY_SET = {
     BookingXtras: "BookingXtra",
     ContractXtras: "ContractXtra",
     QuoteLineXtras: "QuoteLineXtra",
+    ProductItemXtras: "ProductItemXtra",
 };
 /**
  * Hard-coded slot families. The Xtra slot count is fixed per family across

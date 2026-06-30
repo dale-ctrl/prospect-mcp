@@ -46,6 +46,7 @@ const ENTITY_ID_BY_SET: Record<string, string> = {
   BookingXtras: "BookingXtra",
   ContractXtras: "ContractXtra",
   QuoteLineXtras: "QuoteLineXtra",
+  ProductItemXtras: "ProductItemXtra",
 };
 
 /**

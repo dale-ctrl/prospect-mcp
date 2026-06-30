@@ -13,8 +13,10 @@ export const getXtraFieldsSchema = z.object({
     entityType: z.enum([
         "QuoteXtras", "ContactXtras", "DivisionXtras", "LeadXtras",
         "CampaignXtras", "BookingXtras", "ContractXtras", "QuoteLineXtras",
+        "ProductItemXtras",
     ]).describe("Which Xtra entity set to query"),
-    parentId: z.union([z.number(), z.string()]).describe("The parent entity ID (e.g. QuoteId, ContactId, DivisionId, QuoteLineId for QuoteLineXtras)"),
+    parentId: z.union([z.number(), z.string()]).describe("The parent entity ID. Integer for most entities (e.g. QuoteId, ContactId, DivisionId, QuoteLineId). " +
+        "STRING for ProductItemXtras — pass the ProductItemId (e.g. 'NC17062601')."),
 });
 export const getContactProfilingSchema = z.object({
     contactId: z.number().describe("ContactId to get profiling/recall data for"),
@@ -166,11 +168,22 @@ export async function getXtraFields(args) {
         BookingXtras: "BookingId",
         ContractXtras: "ContractId",
         QuoteLineXtras: "QuoteLineId",
+        // ProductItemXtra has a composite primary key
+        // (OperatingCompanyCode + ProductItemId). Filtering by ProductItemId alone
+        // is enough on this tenant — WCG uses a single OperatingCompanyCode ('A')
+        // and ProductItemId is unique within it, so the row resolves uniquely.
+        ProductItemXtras: "ProductItemId",
     };
     const parentKey = parentKeyMap[args.entityType];
     if (!parentKey) {
         return `Unknown Xtra entity type: ${args.entityType}`;
     }
+    // String parent IDs (ProductItemId) need single-quoting + OData escape in the
+    // $filter clause; integer IDs go through unquoted. Quoting an integer would
+    // produce `QuoteId eq '15782'` which is a type-mismatch 400.
+    const filterValue = typeof args.parentId === "string"
+        ? `'${args.parentId.replace(/'/g, "''")}'`
+        : String(args.parentId);
     // Fetch slots, data, and dropdown labels in parallel. Slots are cached per
     // process; the dropdown-label lookup runs every call (DropdownItems is
     // small per entity) but failures are absorbed by the formatter.
@@ -181,7 +194,7 @@ export async function getXtraFields(args) {
             // not StandardBooleanField). A hardcoded select 400s on those fields.
             // Instead, ask for everything and let the formatter ignore unknown shapes.
             const sp = new URLSearchParams();
-            sp.set("$filter", `${parentKey} eq ${args.parentId}`);
+            sp.set("$filter", `${parentKey} eq ${filterValue}`);
             return client.get(args.entityType, sp.toString());
         })(),
         loadXtraSlots(client, args.entityType).catch(() => []),

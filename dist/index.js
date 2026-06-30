@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// prospect-crm-mcp v1.27.0 — bundled by esbuild on 2026-06-26T15:26:36.212Z
+// prospect-crm-mcp v1.28.0 — bundled by esbuild on 2026-06-30T15:22:56.624Z
 // Single-file MCP server; no node_modules required at runtime.
 var __create = Object.create;
 var __defProp = Object.defineProperty;
@@ -21889,7 +21889,8 @@ var ENTITY_ID_BY_SET = {
   CampaignXtras: "CampaignXtra",
   BookingXtras: "BookingXtra",
   ContractXtras: "ContractXtra",
-  QuoteLineXtras: "QuoteLineXtra"
+  QuoteLineXtras: "QuoteLineXtra",
+  ProductItemXtras: "ProductItemXtra"
 };
 var SLOT_FAMILIES = [
   { kind: "Text", column: "text", count: 10 },
@@ -24978,6 +24979,68 @@ async function uploadProductImage(args) {
     "",
     "Verify in **Manage Images** on the product. The first image uploaded to a product is normally auto-primary in Prospect; if you need to change primary on a multi-image product, use the web UI for now (separate endpoint not yet wired)."
   ].join("\n");
+}
+var PRODUCT_ITEM_XTRAS_ENTITY_SET = "ProductItemXtras";
+var updateProductXtraSchema = external_exports.object({
+  productItemId: external_exports.string().describe(
+    "Product code / SKU (ProductItemId) whose ProductItemXtra row to update (matches the ProductItem this Xtra row hangs off of, e.g. 'NC17062601')."
+  ),
+  fields: external_exports.record(external_exports.string(), external_exports.union([external_exports.string(), external_exports.number(), external_exports.boolean(), external_exports.null()])).describe(
+    "Custom-field values keyed by ANY of: (1) friendly label when configured (e.g. 'Dimensions'), (2) slot identifier \u2014 'StandardTextField1..10', 'StandardMemoField1..5', 'StandardDropdownField1..5', 'StandardDateField1..5', 'StandardDecimalField1..5', 'StandardFlagField1..5', 'StandardSearchTextField1..3' \u2014 or (3) raw column name 'x_365_custom_<type>_<n>'. Pass null to clear a slot. Use get_xtra_fields(entityType='ProductItemXtras', parentId='<productItemId>') to see all configured slots and their friendly labels for this tenant."
+  )
+});
+async function upsertProductItemXtra(productItemId, body) {
+  const client = getClient();
+  const escapedCode = productItemId.replace(/'/g, "''");
+  const keyExpr = `OperatingCompanyCode='${OPERATING_COMPANY_CODE3}',ProductItemId='${escapedCode}'`;
+  try {
+    await client.patch(
+      PRODUCT_ITEM_XTRAS_ENTITY_SET,
+      keyExpr,
+      body
+    );
+  } catch (err) {
+    const msg = err.message || "";
+    if (/HTTP 404/.test(msg)) {
+      await client.post(PRODUCT_ITEM_XTRAS_ENTITY_SET, {
+        OperatingCompanyCode: OPERATING_COMPANY_CODE3,
+        ProductItemId: productItemId,
+        ...body
+      });
+    } else {
+      throw err;
+    }
+  }
+  const sp = new URLSearchParams();
+  sp.set("$filter", `ProductItemId eq '${escapedCode}'`);
+  sp.set("$top", "1");
+  const result = await client.get(
+    PRODUCT_ITEM_XTRAS_ENTITY_SET,
+    sp.toString()
+  );
+  return result.value[0] ?? {
+    OperatingCompanyCode: OPERATING_COMPANY_CODE3,
+    ProductItemId: productItemId,
+    ...body
+  };
+}
+async function updateProductXtra(input) {
+  const args = updateProductXtraSchema.parse(input);
+  const client = getClient();
+  if (!args.fields || Object.keys(args.fields).length === 0) {
+    return `No fields provided to update on ProductItemXtra for '${args.productItemId}'.`;
+  }
+  const slots = await loadXtraSlots(client, PRODUCT_ITEM_XTRAS_ENTITY_SET).catch(
+    () => []
+  );
+  const body = resolveXtraFieldsToBody(slots, args.fields);
+  const row = await upsertProductItemXtra(args.productItemId, body);
+  return JSON.stringify({
+    ok: true,
+    productItemId: args.productItemId,
+    fieldsUpdated: Object.keys(body),
+    row
+  });
 }
 
 // src/tools/opportunities.ts
@@ -29110,9 +29173,12 @@ var getXtraFieldsSchema = external_exports.object({
     "CampaignXtras",
     "BookingXtras",
     "ContractXtras",
-    "QuoteLineXtras"
+    "QuoteLineXtras",
+    "ProductItemXtras"
   ]).describe("Which Xtra entity set to query"),
-  parentId: external_exports.union([external_exports.number(), external_exports.string()]).describe("The parent entity ID (e.g. QuoteId, ContactId, DivisionId, QuoteLineId for QuoteLineXtras)")
+  parentId: external_exports.union([external_exports.number(), external_exports.string()]).describe(
+    "The parent entity ID. Integer for most entities (e.g. QuoteId, ContactId, DivisionId, QuoteLineId). STRING for ProductItemXtras \u2014 pass the ProductItemId (e.g. 'NC17062601')."
+  )
 });
 var getContactProfilingSchema = external_exports.object({
   contactId: external_exports.number().describe("ContactId to get profiling/recall data for")
@@ -29237,16 +29303,22 @@ async function getXtraFields(args) {
     CampaignXtras: "CampaignId",
     BookingXtras: "BookingId",
     ContractXtras: "ContractId",
-    QuoteLineXtras: "QuoteLineId"
+    QuoteLineXtras: "QuoteLineId",
+    // ProductItemXtra has a composite primary key
+    // (OperatingCompanyCode + ProductItemId). Filtering by ProductItemId alone
+    // is enough on this tenant — WCG uses a single OperatingCompanyCode ('A')
+    // and ProductItemId is unique within it, so the row resolves uniquely.
+    ProductItemXtras: "ProductItemId"
   };
   const parentKey = parentKeyMap[args.entityType];
   if (!parentKey) {
     return `Unknown Xtra entity type: ${args.entityType}`;
   }
+  const filterValue = typeof args.parentId === "string" ? `'${args.parentId.replace(/'/g, "''")}'` : String(args.parentId);
   const [result, slots, dropdownLabels] = await Promise.all([
     (async () => {
       const sp = new URLSearchParams();
-      sp.set("$filter", `${parentKey} eq ${args.parentId}`);
+      sp.set("$filter", `${parentKey} eq ${filterValue}`);
       return client.get(args.entityType, sp.toString());
     })(),
     loadXtraSlots(client, args.entityType).catch(() => []),
@@ -29633,6 +29705,7 @@ var TOOL_PERMISSION_MAP = {
   create_product: { module: "catalogue", action: "create" },
   update_product: { module: "catalogue", action: "edit" },
   upload_product_image: { module: "catalogue", action: "edit" },
+  update_product_xtra: { module: "catalogue", action: "edit" },
   update_inventory: { module: "inventory", action: "edit" },
   save_quoting_lesson: { module: "knowledge", action: "create" },
   save_product_note: { module: "knowledge", action: "create" },
@@ -31545,6 +31618,19 @@ registerWriteTool(
   async (args) => {
     try {
       const result = await uploadProductImage(uploadProductImageSchema.parse(args));
+      return { content: [{ type: "text", text: result }] };
+    } catch (err) {
+      return { content: [{ type: "text", text: `Error: ${err.message}` }], isError: true };
+    }
+  }
+);
+registerWriteTool(
+  "update_product_xtra",
+  "Write ProductItemXtra custom fields on a ProductItem \u2014 Dimensions, Supplier, Supplier Code, Colour, etc. (whatever the tenant has configured under 'Custom Fields' on a product). Fields can be keyed by friendly label ('Dimensions'), slot identifier ('StandardMemoField2'), or raw column ('x_365_custom_memo_2'). Pass null to clear a slot. Upserts the ProductItemXtra row if it doesn't exist yet. Composite-key entity \u2014 uses (OperatingCompanyCode='A', ProductItemId='<code>') for PATCH/POST, same shape as update_product. Use get_xtra_fields(entityType='ProductItemXtras', parentId='<productItemId>') first to discover the configured slots and labels for this tenant.",
+  updateProductXtraSchema.shape,
+  async (args) => {
+    try {
+      const result = await updateProductXtra(updateProductXtraSchema.parse(args));
       return { content: [{ type: "text", text: result }] };
     } catch (err) {
       return { content: [{ type: "text", text: `Error: ${err.message}` }], isError: true };

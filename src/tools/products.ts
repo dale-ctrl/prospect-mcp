@@ -33,6 +33,7 @@
 import { z } from "zod";
 import { getClient } from "../client.js";
 import { toCrmLink } from "../lib/urls.js";
+import { loadXtraSlots, resolveXtraFieldsToBody } from "../lib/xtra-labels.js";
 
 // WCG operating company — same as contacts.ts / quotes.ts. ProductItem's
 // primary key is composite (OperatingCompanyCode + ProductItemId), so the
@@ -437,4 +438,130 @@ export async function uploadProductImage(
     "",
     "Verify in **Manage Images** on the product. The first image uploaded to a product is normally auto-primary in Prospect; if you need to change primary on a multi-image product, use the web UI for now (separate endpoint not yet wired).",
   ].join("\n");
+}
+
+// ─── update_product_xtra ──────────────────────────────────────
+//
+// Generic writer for ProductItemXtra custom fields (Dimensions, Supplier,
+// Supplier Code, Colour, etc. — whatever the tenant has configured under
+// "Custom Fields" on a ProductItem). Counterpart to update_division_xtra
+// (division-xtra.ts) and the update_quote_line_xtra branch inside
+// quote-lines.ts. Reuses the shared label resolver in lib/xtra-labels.ts
+// so callers can key by friendly label, slot identifier, or raw column.
+//
+// ProductItemXtra shares ProductItem's COMPOSITE primary key
+// (OperatingCompanyCode + ProductItemId). PATCH/GET-by-id therefore needs
+// the full key URL form ProductItemXtras(OperatingCompanyCode='A',
+// ProductItemId='NC...') — confirmed in $metadata, line 10302-10377.
+// The single-string-key form returns HTTP 500 on this tenant, same quirk
+// resolved for ProductItems in v1.22.0.
+//
+// All slot columns (StandardTextField1-10, StandardMemoField1-5,
+// StandardDropdownField1-5, StandardDateField1-5, StandardDecimalField1-5,
+// StandardFlagField1-5, StandardSearchTextField1-3) have
+// meta:UpdateVisibility="common" — direct PATCH works; no computed-field
+// quirks like the price-storage situation on ProductItem itself.
+const PRODUCT_ITEM_XTRAS_ENTITY_SET = "ProductItemXtras";
+
+export const updateProductXtraSchema = z.object({
+  productItemId: z
+    .string()
+    .describe(
+      "Product code / SKU (ProductItemId) whose ProductItemXtra row to update (matches the ProductItem this Xtra row hangs off of, e.g. 'NC17062601').",
+    ),
+  fields: z
+    .record(z.string(), z.union([z.string(), z.number(), z.boolean(), z.null()]))
+    .describe(
+      "Custom-field values keyed by ANY of: (1) friendly label when configured " +
+        "(e.g. 'Dimensions'), (2) slot identifier — 'StandardTextField1..10', " +
+        "'StandardMemoField1..5', 'StandardDropdownField1..5', 'StandardDateField1..5', " +
+        "'StandardDecimalField1..5', 'StandardFlagField1..5', 'StandardSearchTextField1..3' " +
+        "— or (3) raw column name 'x_365_custom_<type>_<n>'. Pass null to clear a slot. " +
+        "Use get_xtra_fields(entityType='ProductItemXtras', parentId='<productItemId>') to " +
+        "see all configured slots and their friendly labels for this tenant.",
+    ),
+});
+
+/**
+ * PATCH the ProductItemXtra row for a ProductItem; if the row doesn't exist
+ * (HTTP 404), POST a new one keyed by the composite (OperatingCompanyCode +
+ * ProductItemId). Mirrors upsertDivisionXtra (division-xtra.ts) / upsert
+ * pattern in quote-lines.ts, with the composite-key URL form for PATCH.
+ */
+async function upsertProductItemXtra(
+  productItemId: string,
+  body: Record<string, unknown>,
+): Promise<Record<string, unknown>> {
+  const client = getClient();
+  const escapedCode = productItemId.replace(/'/g, "''");
+  const keyExpr =
+    `OperatingCompanyCode='${OPERATING_COMPANY_CODE}',ProductItemId='${escapedCode}'`;
+  try {
+    await client.patch<Record<string, unknown>>(
+      PRODUCT_ITEM_XTRAS_ENTITY_SET,
+      keyExpr,
+      body,
+    );
+  } catch (err) {
+    const msg = (err as Error).message || "";
+    if (/HTTP 404/.test(msg)) {
+      // No Xtra row yet for this product — create one with both halves of
+      // the composite key in the body. Both columns have
+      // meta:UpdateVisibility="never" but POST honours them at creation
+      // time (same POST-vs-PATCH distinction documented for ProductItem
+      // itself; see quirk note 3 at the top of this file).
+      await client.post<Record<string, unknown>>(PRODUCT_ITEM_XTRAS_ENTITY_SET, {
+        OperatingCompanyCode: OPERATING_COMPANY_CODE,
+        ProductItemId: productItemId,
+        ...body,
+      });
+    } else {
+      throw err;
+    }
+  }
+  // Read back the row so the caller sees the persisted state, not just
+  // what we sent. Use ProductItemId-only filter — single OperatingCompanyCode
+  // tenant, ProductItemId is unique within it.
+  const sp = new URLSearchParams();
+  sp.set("$filter", `ProductItemId eq '${escapedCode}'`);
+  sp.set("$top", "1");
+  const result = await client.get<Record<string, unknown>>(
+    PRODUCT_ITEM_XTRAS_ENTITY_SET,
+    sp.toString(),
+  );
+  return (
+    result.value[0] ?? {
+      OperatingCompanyCode: OPERATING_COMPANY_CODE,
+      ProductItemId: productItemId,
+      ...body,
+    }
+  );
+}
+
+export async function updateProductXtra(
+  input: z.input<typeof updateProductXtraSchema>,
+): Promise<string> {
+  const args = updateProductXtraSchema.parse(input);
+  const client = getClient();
+
+  if (!args.fields || Object.keys(args.fields).length === 0) {
+    return `No fields provided to update on ProductItemXtra for '${args.productItemId}'.`;
+  }
+
+  // Translate {label | identifier | columnName -> value} into {identifier -> value}.
+  // Resolver pulls live slot config + friendly labels from EntityFields +
+  // Translations; falls back to the structural slot pattern if either is
+  // unreachable so writes via identifier/column always succeed.
+  const slots = await loadXtraSlots(client, PRODUCT_ITEM_XTRAS_ENTITY_SET).catch(
+    () => [],
+  );
+  const body = resolveXtraFieldsToBody(slots, args.fields);
+
+  const row = await upsertProductItemXtra(args.productItemId, body);
+  return JSON.stringify({
+    ok: true,
+    productItemId: args.productItemId,
+    fieldsUpdated: Object.keys(body),
+    row,
+  });
 }

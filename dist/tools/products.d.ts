@@ -144,4 +144,15 @@ export declare const uploadProductImageSchema: z.ZodObject<{
     imageBase64?: string | undefined;
 }>;
 export declare function uploadProductImage(args: z.infer<typeof uploadProductImageSchema>): Promise<string>;
+export declare const updateProductXtraSchema: z.ZodObject<{
+    productItemId: z.ZodString;
+    fields: z.ZodRecord<z.ZodString, z.ZodUnion<[z.ZodString, z.ZodNumber, z.ZodBoolean, z.ZodNull]>>;
+}, "strip", z.ZodTypeAny, {
+    fields: Record<string, string | number | boolean | null>;
+    productItemId: string;
+}, {
+    fields: Record<string, string | number | boolean | null>;
+    productItemId: string;
+}>;
+export declare function updateProductXtra(input: z.input<typeof updateProductXtraSchema>): Promise<string>;
 //# sourceMappingURL=products.d.ts.map
