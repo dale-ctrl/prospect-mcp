@@ -318,6 +318,30 @@ supplier / product / process that future quotes need to know, save it BEFORE end
 
 Keep these entries factual and dated. Add the originating opp/quote ID for traceability.
 
+## Amending an existing quote (raising a new version)
+
+When the user asks to "amend" or "do a new version of" quote N, do NOT edit the sent quote in
+place — duplicate it and amend the copy:
+
+1. `get_quote(quoteId=N)` — review lines, groups, prices; note the LineIds.
+2. `duplicate_quote(quoteId=N)` — copies the header and all ACTIVE lines (soft-deleted source
+   lines are skipped), carries the opportunity link and line custom fields (Colour/Supplier).
+3. Know the duplicate's quirks (all observed live on quote 15782 → 16077, 2026-07-03):
+   - **Line sequence is NOT preserved** — lines can come back renumbered/reordered vs the
+     original. `get_quote` the copy and fix sequences before adding anything.
+   - **Copied line cost prices reset to catalogue** — a product-linked line shows the
+     product's CURRENT catalogue cost, not the cost that was on the original line (e.g. £118
+     original → £96 catalogue). Re-apply per-line costs via `update_quote_line` if they differ.
+   - **Price Expiry comes through as 0001-01-01** — always call
+     `update_quote(quoteId=<new>, priceExpiryDate=<created + 30 days>)` on the copy.
+4. SKU swaps on the copy follow Pitfall 9: add the replacement line (matching group/sequence),
+   then ask the user to delete the superseded copied line(s) in the UI — delete is disabled
+   via MCP. Give them the LineIds.
+5. If the replacement is a brand-new NC product, watch VAT: verify the new line's Gross =
+   Net × 1.2, and repair with `update_quote_line(lineId, taxCode="1")` if not (see the
+   create-product skill's taxCode warning).
+6. Refresh the memo via `update_quote` to say it's a new version of quote N and what changed.
+
 ## Known Pitfalls
 
 ### Pitfall 1 — Concurrent UI edits can change OR add to the quote
@@ -518,6 +542,13 @@ and rejects PATCH on the field outright with HTTP 500.
 
 No manual UI step needed for line discounts. The `discountPercentage` arg behaves as documented.
 
+### Pitfall 16 — `search_products` fails when searchTerm contains `&`
+
+The OData $filter is built from the raw term, so `&` truncates the query string and the server
+returns HTTP 400 "unterminated string literal". E.g. searching `DEL,RP&ASSEM` fails — search
+`DEL,RP` instead and pick from the results. Applies to any term with `&` (service codes,
+"ASSEMBLY & INSTALL", supplier names).
+
 ### Default pricing rule — SKU prefix
 
 - **SKUs starting with `Y`** (e.g. `Y100323`) → use the **standard catalogue price** from the
@@ -545,12 +576,12 @@ At Step 1:
 
 | Code | Description | Notes |
 |---|---|---|
-| `DELIVERY-E-1` | Delivery only — to your school, no charge | Stock item |
+| `DELIVERY-E` | Delivery only | ACTIVE code (WG, category PRICE). `DELIVERY-E-1` is OBSOLETE — do not use (confirmed 2026-06-19 & 2026-06-30) |
 | `DELIVERY-C` | Delivery / Carriage Charge | Use when delivery is chargeable |
-| `DEL&ASSEM-E-1` | Delivery + assembly, ground floor only | Stock item |
+| `DEL&ASSEM-E-1` | Delivery + assembly, ground floor only | Check the Obsolete flag first — `-E-1` variants are being retired |
 | `DEL&ASSEM-C` | Delivery + assembly, commercial | |
 | `ROOM-PLACEMENT-E` | Delivery + room placement (no assembly) | |
-| `DEL,RP&ASSEM-E-1` | Delivery, room placement, AND assembly | Full white-glove |
+| `DEL,RP&ASSEM-E` | Delivery, room placement, AND assembly | Full white-glove. Prefer over `DEL,RP&ASSEM-E-1` (matches the WG/PRICE pattern of DELIVERY-E; used successfully on quote 16077, 2026-07-03) |
 | `DEL,RP&ASSEM-C` | Delivery, room placement, AND assembly, commercial | |
 | `CASUAL/ASSEM-E` | Casual labour — assembly | When assembly is contracted out |
 | `ASSEMBLY & INSTALL` | Assembly & install (combined) | |
@@ -566,9 +597,12 @@ known, auto-derive the delivery SKU from this table:
 
 | Delivery Type label | Education (-E) | Commercial (-C) |
 |---|---|---|
-| Delivery Only | DELIVERY-E-1 | DELIVERY-C |
+| Delivery Only | DELIVERY-E | DELIVERY-C |
 | Delivery and Assembly | DEL&ASSEM-E-1 | DEL&ASSEM-C |
-| Delivery, Room Placement & Assembly | DEL,RP&ASSEM-E-1 | DEL,RP&ASSEM-C |
+| Delivery, Room Placement & Assembly | DEL,RP&ASSEM-E | DEL,RP&ASSEM-C |
+
+Always `get_product_detail` the chosen service SKU and check `Obsolete` before adding the line
+(2026-06-19 lesson — DELIVERY-E-1 was obsolete; other `-E-1` variants may follow).
 
 Customer type comes from the Division's Customer Type / Sector dropdown — education = schools,
 academies, MATs, colleges, universities; commercial = everything else.
@@ -660,6 +694,13 @@ End every quote-creation session with:
 
 ## Changelog
 
+- **2026-07-03 (v6)** — Added "Amending an existing quote (raising a new version)" section from
+  the Monkerton session (quote 15782 → 16077): use `duplicate_quote`, with its three live-observed
+  quirks (sequence not preserved; copied line costs reset to catalogue; Price Expiry copies as
+  0001-01-01 — always set `priceExpiryDate`), Pitfall-9 SKU-swap flow on the copy, and a VAT check
+  for new NC lines. Added Pitfall 16 (`&` in search_products searchTerm → HTTP 400). Corrected the
+  service-code table and Delivery Type → SKU mapping: DELIVERY-E replaces obsolete DELIVERY-E-1,
+  DEL,RP&ASSEM-E preferred over -E-1, plus an Obsolete-flag check before adding any service line.
 - **2026-05-21 (v5)** — Pitfalls 13 and 15 RESOLVED in MCP v1.16.0. The WCG tenant's
   server-side QuoteLines write-path was clobbering both price and discount via two related
   failure modes: (a) POST zeroes `DecimalDiscountPercentage` regardless of headers tried

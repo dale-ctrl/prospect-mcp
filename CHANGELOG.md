@@ -6,6 +6,23 @@ The format is based on Keep a Changelog, and this project adheres to Semantic Ve
 
 ## [Unreleased]
 
+## [1.29.0] - 2026-07-03
+### Changed — skill updates from the Monkerton quote 16077 / NC03072601 retrospective
+
+Docs-only release. Two order-blocking gaps found during quote 16077 (NC03072601) closed out with skill guidance until the underlying tools can be extended.
+
+#### `prospect-crm-create-product` → v2.3
+- **`taxCode` is NOT server-defaulted on this tenant** — the "Default Tax Code" system option is `N/A`, so omitting `taxCode` on `create_product` creates a product with no VAT code, and quote lines added with that SKU price at Gross = Net. Skill now tells callers to ALWAYS pass `taxCode="1"` (standard 20% VAT). Warning paragraph + example update + Pitfalls entry all in. Line repair: `update_quote_line(lineId, taxCode="1")` (confirmed working live). Product repair: Prospect UI only (`update_product` cannot write `taxCode`).
+- **New §4b: Purchase Nominal must be set manually.** `create_product` has no `purchaseAnalysis` parameter, so every MCP-created product is born with an empty Purchase Nominal. Access Dimensions rejects order conversion with `System.Exception: Invalid product category for quote <id>, line <n>` (observed live on NC03072601 / quote 16077). Skill now includes a mandatory UI-fix step after every `create_product`, with pointer to comparable-SKU nominal codes. Both `taxCode` and `purchaseAnalysis` flagged as ACTIONABLE items for the MCP repo.
+- **New pitfall: `&` in `search_products` searchTerm returns HTTP 400** ("unterminated string literal"). Search a substring without the ampersand.
+
+#### `prospect-crm-create-quote` → v6
+- **New section: "Amending an existing quote (raising a new version)"** — when the user asks to "amend" or "do a new version of" quote N, duplicate first, amend the copy. Codifies three live-observed `duplicate_quote` quirks: (1) line sequence is not preserved on the copy, (2) copied line cost prices reset to current catalogue cost (not the cost on the original line), (3) Price Expiry copies as `0001-01-01` — always set `priceExpiryDate` explicitly on the new quote. Includes the Pitfall 9 SKU-swap flow on the copy and a VAT check for new NC-product lines.
+- **Pitfall 16 added** — same `&`-in-searchTerm HTTP 400 as the create-product skill.
+- **Service-code table + Delivery Type → SKU mapping corrected** — `DELIVERY-E-1` is OBSOLETE; `DELIVERY-E` is the ACTIVE code (WG, category PRICE). `DEL,RP&ASSEM-E` preferred over `-E-1` (matches the WG/PRICE pattern of DELIVERY-E; used successfully on quote 16077). Added an Obsolete-flag check before adding any service line.
+
+No tool code changes. Team picks it up via Cowork → Update → restart Claude Desktop.
+
 ## [1.28.0] - 2026-06-30
 ### Added — ProductItemXtra read + write (`get_xtra_fields` extension + `update_product_xtra`)
 

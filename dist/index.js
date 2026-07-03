@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// prospect-crm-mcp v1.28.0 — bundled by esbuild on 2026-06-30T15:22:56.624Z
+// prospect-crm-mcp v1.29.0 — bundled by esbuild on 2026-07-03T15:21:03.451Z
 // Single-file MCP server; no node_modules required at runtime.
 var __create = Object.create;
 var __defProp = Object.defineProperty;
