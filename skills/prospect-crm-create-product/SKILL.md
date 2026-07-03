@@ -129,7 +129,7 @@ lookup. Record in the product/quote memo that it's bespoke and where the price c
 
 ## 4. Create the product
 
-**Preferred — `create_product` MCP tool** (deployed v1.21.0; fixes v1.22.0; duplicate guard v1.24.0):
+**Preferred — `create_product` MCP tool** (deployed v1.21.0; fixes v1.22.0; duplicate guard v1.24.0; VAT + Purchase Nominal in v1.30.0):
 
 ```
 create_product(
@@ -140,9 +140,10 @@ create_product(
   manufacturer="Hawk Furniture",
   manufacturerReference="WESTCOUNTRY-31797",
   unitDescription="Each",
-  taxCode="1",                       # ALWAYS pass — standard 20% VAT; see warning below
+  vatCode="1",                       # ALWAYS pass — standard 20% VAT (WCG default)
   categoryId="<defaults to STOCK if omitted; match a comparable SKU via get_product_categories>",
-  salesAnalysis="<copy from a comparable furniture SKU via get_product_detail>",
+  salesAnalysis="10-1-1230-000",     # WCG furniture sales nominal (or match comparable SKU)
+  purchaseAnalysis="10-1-2006-000",  # ALWAYS pass — WCG furniture purchase nominal
   extendedDescription="<optional product blurb>"
 )
 ```
@@ -153,15 +154,28 @@ catalogue, the tool returns `duplicate: true` with the existing code instead of 
 SKU — that's the right outcome; reuse the existing code on the quote. Override with
 `allowDuplicate=true` only for a genuine variant.
 
-**Always pass `taxCode="1"` (standard 20% VAT).** The schema note "defaults to the tenant
-standard if omitted" is WRONG on the WCG tenant — the "Default Tax Code" system option is N/A,
-so omitting taxCode creates a product with NO VAT code. Quote lines added with that SKU then
-price at Gross = Net (no VAT applied). Repair an affected line with
-`update_quote_line(lineId=..., taxCode="1")` — confirmed working (quote 16077, 2026-07-03).
-The product itself can only be fixed in the Prospect UI: `update_product` cannot write taxCode.
+**Always pass `vatCode="1"` (standard 20% VAT) AND `purchaseAnalysis="10-1-2006-000"` (WCG
+furniture Purchase Nominal).** Both are create-only POST fields (UpdateVisibility="never" on the
+ProductItem entity) — they CANNOT be set later via `update_product`, only in the Prospect UI. If
+omitted:
 
-After creating, `get_product_detail(productItemId="NC17062601")` and confirm sell/cost/margin
-persisted.
+- No VAT code → quote lines added with this SKU price at Gross = Net (no VAT applied). Line-level
+  repair via `update_quote_line(lineId, taxCode="1")`.
+- No Purchase Nominal → Access Dimensions rejects order conversion with
+  `System.Exception: Invalid product category for quote <id>, line <n>` — the quote can't become
+  an order until someone opens the product in the UI and sets the nominal by hand.
+
+Standard WCG values: `vatCode="1"`, `purchaseAnalysis="10-1-2006-000"` (furniture — many bespoke
+tables use `10-1-2581-000` for both nominals; match a comparable SKU via `get_product_detail`
+when unsure). `create_product` reads both back after POST and surfaces them in the response as
+`**VAT code:**` and `**Purchase Nominal:**` — check those lines aren't null before proceeding.
+
+> The pre-v1.30.0 `taxCode` arg is a deprecated alias for `vatCode` (older code wrote a
+> non-existent `TaxCode` property that silently failed — that's how the Monkerton NC03072601
+> break happened). Kept for back-compat but prefer `vatCode` going forward.
+
+After creating, `get_product_detail(productItemId="NC17062601")` and confirm sell/cost/margin/
+VAT code/Purchase Nominal persisted (the read-back now surfaces all of them).
 
 **Interim — if `create_product` is not yet deployed:** create the item in the Prospect web UI
 (Products → New), entering the same fields, OR have the estimator create it. Then proceed to §4a.
@@ -217,32 +231,24 @@ the Custom Fields tab.
 > (OperatingCompanyCode + ProductItemId) — different table, different OData entity set,
 > separate write call.
 
-## 4b. Purchase Nominal — set in the UI or the Dimensions order conversion FAILS
+## 4b. Purchase Nominal — resolved in v1.30.0 (was: manual UI step)
 
-`create_product` has no `purchaseAnalysis` parameter, so every MCP-created product is born with
-an empty Purchase Nominal. The Access Dimensions integration validates the product's nominal
-codes when a quote converts to an order and rejects the line with:
+Pre-v1.30.0, `create_product` had no `purchaseAnalysis` parameter, so MCP-created products were
+born with an empty Purchase Nominal and Access Dimensions rejected order conversion with
+`System.Exception: Invalid product category for quote <id>, line <n>` (observed live on quote
+16077, NC03072601). At the time this section instructed callers to set Purchase Nominal in the
+Prospect UI as a follow-up step.
 
-    System.Exception: Invalid product category for quote <id>, line <n>.
-      at ProspectSoft.Integration.AccessDimensions.ConfirmOfflineOrdersItem.CreateOrder(Quote quote)
+**As of v1.30.0 this is folded into §4:** pass `purchaseAnalysis="10-1-2006-000"` alongside
+`vatCode="1"` on the `create_product` call and the product ships ready for Dimensions order
+conversion — no manual UI step needed. Both fields are create-only (UpdateVisibility="never"),
+so `update_product` still can't repair a product created without them; the Prospect UI is the
+only recovery path for legacy blanks.
 
-(Observed live 2026-07-03: NC03072601 on quote 16077 — conversion failed until the Purchase
-Nominal was set manually. Manually created NC items always have it populated because the UI
-form requires it.)
-
-Until the MCP gains a `purchaseAnalysis` parameter, after every `create_product`:
-
-1. Open the product in the Prospect UI (nominal/accounts settings).
-2. Set **Purchase Nominal** to match a comparable SKU — read it via `get_product_detail` on the
-   comparable item (e.g. Sales `10-1-1230-000` pairs with Purchase `10-1-2006-000`; many
-   bespoke tables use `10-1-2581-000` for both).
-3. While there, confirm the **VAT code** is set (see the taxCode warning in §4).
-4. Tell the user explicitly that this step is done / needed — do NOT let it surface as a
-   Dimensions error at order time.
-
-**ACTIONABLE for MCP repo:** add `purchaseAnalysis` to `create_product` (and make `taxCode`
-effectively required for NC items); consider defaulting both by mirroring the comparable SKU
-passed for `salesAnalysis`.
+If you're using a pre-v1.30.0 build for any reason (older marketplace clone, etc.) the old
+UI-repair flow is: open the product in Prospect → nominal/accounts settings → set Purchase
+Nominal to match a comparable SKU (many bespoke tables use `10-1-2581-000`; furniture default is
+`10-1-2006-000`). Match Sales Nominal against a comparable SKU too.
 
 ## 5. Find and attach a product image (Manage Images)
 
@@ -451,18 +457,29 @@ fields the tenant configures under "Custom Fields" on a ProductItem. Counterpart
   misleading photo.
 - **Don't side-load images** — only fetch via `WebSearch`/`web_fetch` (or Claude-in-Chrome for
   rendered pages). No curl/wget/archive mirrors.
-- **taxCode does NOT default** — omitting `taxCode` on `create_product` leaves the product with
-  no VAT code (tenant "Default Tax Code" = N/A) and quote lines price at Gross = Net. Always
-  pass `taxCode="1"`. Line repair: `update_quote_line(lineId, taxCode="1")`; product repair:
-  Prospect UI only.
-- **Missing Purchase Nominal breaks order conversion** — "Invalid product category for quote
-  <id>, line <n>" from the Dimensions integration means the product's Purchase Nominal is
-  blank. `create_product` cannot set it — fix in the UI per §4b before converting.
+- **VAT code does NOT default; Purchase Nominal is order-critical** — always pass
+  `vatCode="1"` AND `purchaseAnalysis="10-1-2006-000"` on `create_product` (both landed as
+  writable POST fields in v1.30.0). Omitting `vatCode` → quote lines price at Gross = Net
+  (line-level repair: `update_quote_line(lineId, taxCode="1")`); omitting `purchaseAnalysis`
+  → Access Dimensions rejects order conversion with "Invalid product category". Both are
+  create-only (`UpdateVisibility="never"`), so `update_product` can NOT repair a product
+  created without them — only the Prospect UI. The pre-v1.30.0 `taxCode` arg is a deprecated
+  alias for `vatCode` that used to silently write a non-existent `TaxCode` property (Monkerton
+  NC03072601 broke this way — VatCode landed as null).
 - **`&` in search_products searchTerm returns HTTP 400** — the OData filter breaks
   ("unterminated string literal"). Search a substring without the ampersand, e.g. `DEL,RP`
   instead of `DEL,RP&ASSEM`.
 
 ## Changelog
+- **2026-07-03 (v2.4)** — Fixed the two order-blocking gaps from v2.3 at source (v1.30.0
+  code change, same-day). `create_product` now writes `vatCode` and `purchaseAnalysis` on the
+  POST body — pre-v1.30.0 the `taxCode` param wrote a non-existent `TaxCode` property that
+  silently failed, leaving `VatCode` null. §4 example updated with the two new args and the
+  WCG standard values (`vatCode="1"`, `purchaseAnalysis="10-1-2006-000"`). §4b rewritten as
+  "resolved in v1.30.0" — the manual UI step is no longer required for new products. Pitfalls
+  entry collapsed to a single VAT + Purchase Nominal bullet. `get_product_detail` and
+  `create_product`'s own read-back now surface `VAT code` alongside Purchase Nominal so the
+  caller can verify round-trip in one call. Legacy `taxCode` arg kept as a deprecated alias.
 - **2026-07-03 (v2.3)** — Two order-blocking gaps found on NC03072601 / quote 16077 (Monkerton):
   (1) `taxCode` is NOT defaulted by the server — added `taxCode="1"` to the §4 example, a
   warning paragraph, and a pitfall; (2) new §4b: `create_product` cannot set Purchase Nominal,

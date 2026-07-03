@@ -6,6 +6,43 @@ The format is based on Keep a Changelog, and this project adheres to Semantic Ve
 
 ## [Unreleased]
 
+## [1.30.0] - 2026-07-03
+### Fixed — `create_product` VAT code and Purchase Nominal now actually persist
+
+Same-day follow-up to v1.29.0's skill notes. Roots out the underlying tool bug that caused the Monkerton NC03072601 / quote 16077 breakage: the connector's `create_product` was writing to a property that does not exist on the ProductItem entity, so VAT code and Purchase Nominal silently landed as null on every MCP-created NC item.
+
+#### Root cause
+Pre-v1.30.0 the POST body assigned `body.TaxCode = args.taxCode`. The ProductItem OData entity has **no `TaxCode` property** — the server responded `HTTP 400 "The property 'TaxCode' does not exist on type 'ProspectSoft.OData.ProductItem'"`, but the outer flow silently discarded the error, so products came out with `VatCode=null`. Purchase Nominal (`PurchaseAnalysis`) wasn't wired at all. Downstream:
+- Quote lines added with those SKUs priced at Gross=Net (no 20% VAT applied).
+- Access Dimensions rejected order conversion with `System.Exception: Invalid product category for quote <id>, line <n>` (observed live on NC03072601 / quote 16077, 2026-07-03).
+
+#### Correct property names (confirmed against $metadata)
+- **VAT code** → `VatCode` (Edm.String, SqlColumn `vatcode`)
+- **Purchase Nominal** → `PurchaseAnalysis` (Edm.String, SqlColumn `purchaseanalysis`)
+- **Sales Nominal** → `SalesAnalysis` (already working since v1.21.0)
+
+All three have `meta:UpdateVisibility="never"` — POST honours them, PATCH does not, and the UI locks them after creation. So they MUST be set on the initial `create_product`. `update_product` cannot repair a product that shipped without them; the Prospect UI is the only recovery path for legacy blanks.
+
+#### Schema changes on `createProductSchema`
+- **New**: `vatCode` (string, optional) — WCG standard is `"1"` (20% VAT). Writes `ProductItem.VatCode`.
+- **New**: `purchaseAnalysis` (string, optional) — WCG furniture standard is `"10-1-2006-000"`. Writes `ProductItem.PurchaseAnalysis`.
+- **Deprecated alias**: `taxCode` kept for back-compat. Now maps to `VatCode` (used to write the non-existent `TaxCode`). `vatCode` wins if both are supplied.
+- Tool description in `src/index.ts` updated to spell out that BOTH should always be passed for NC items, with the WCG standard values.
+
+#### `Taxable` note
+Original brief called for `body.Taxable = true`. Empirical check on 15 recent products (mix of Y-code catalogue items and NC entries) shows `Taxable=null` on every single one, including the well-configured Y-codes that Access Dimensions accepts. The metadata also declares `Taxable` as `Edm.Decimal`, not Boolean — sending `true` would be a type-mismatch. Left `Taxable` unset; VAT round-trip verified working without it (smoke test). If a downstream integration ever needs it, add it as a numeric `1` in a follow-up, not `true`.
+
+#### Read-back surfacing
+Both `create_product`'s own response and `get_product_detail` now display **VAT code** alongside the existing Purchase / Sales Nominals, so a caller can verify persistence in one call rather than a follow-up. `create_product` also emits an explicit warning line when either VatCode or PurchaseAnalysis comes back null (naming the exact downstream failure that will hit).
+
+#### Skill + knowledge-base updates
+- `skills/prospect-crm-create-product/SKILL.md` → v2.4. §4 example rewritten with the two new args and the WCG standard values. §4b rewritten as "resolved in v1.30.0" — the manual UI step is no longer required for new products, only for repairing legacy blanks. Pitfalls entry collapsed to a single VAT + Purchase Nominal bullet naming both failure modes.
+- Quoting-lesson saved via `save_quoting_lesson` (category `configuration`) so future sessions have the property-name rule from the CRM knowledge base without needing to re-read the changelog.
+
+#### Live smoke test (throwaway NC03072609, obsoleted after)
+- `create_product(autoCode=true, sellPrice=10, costPrice=5, vatCode="1", salesAnalysis="10-1-1230-000", purchaseAnalysis="10-1-2006-000", categoryId="STOCK")` → 200 OK.
+- Read-back: `VatCode="1"`, `PurchaseAnalysis="10-1-2006-000"`, `SalesAnalysis="10-1-1230-000"`, prices intact, `Taxable=null` (matches tenant convention). Product obsoleted.
+
 ## [1.29.0] - 2026-07-03
 ### Changed — skill updates from the Monkerton quote 16077 / NC03072601 retrospective
 

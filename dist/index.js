@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// prospect-crm-mcp v1.29.0 — bundled by esbuild on 2026-07-03T15:21:03.451Z
+// prospect-crm-mcp v1.30.0 — bundled by esbuild on 2026-07-03T16:10:16.771Z
 // Single-file MCP server; no node_modules required at runtime.
 var __create = Object.create;
 var __defProp = Object.defineProperty;
@@ -22369,6 +22369,7 @@ async function getProductDetail(args) {
     "UnitDescription",
     "SalesAnalysis",
     "PurchaseAnalysis",
+    "VatCode",
     "Obsolete",
     "LastUpdated"
   ].join(",");
@@ -22392,7 +22393,7 @@ ${text}
     `## Pricing`,
     `**Sell:** ${money(p.DecimalSellingPrice)} | **Cost:** ${money(p.DecimalCostPrice)} | **Purchase Cost:** ${money(p.DecimalPurchaseCostPrice)}`,
     `**Unit:** ${p.UnitDescription || "N/A"} | **Category:** ${p.CategoryId || "N/A"}`,
-    `**Sales Nominal:** ${p.SalesAnalysis ?? "N/A"} | **Purchase Nominal:** ${p.PurchaseAnalysis ?? "N/A"}`
+    `**Sales Nominal:** ${p.SalesAnalysis ?? "N/A"} | **Purchase Nominal:** ${p.PurchaseAnalysis ?? "N/A"} | **VAT code:** ${p.VatCode ?? "N/A"}`
   ].join("\n");
   const supplier = [
     `## Supplier`,
@@ -24778,7 +24779,15 @@ var createProductSchema = external_exports.object({
   alternateReference1: external_exports.string().optional().describe("Alternate reference 1."),
   alternateReference2: external_exports.string().optional().describe("Alternate reference 2."),
   barcode: external_exports.string().optional().describe("Barcode."),
-  taxCode: external_exports.string().optional().describe("Tax / VAT code (defaults to the tenant standard if omitted)."),
+  vatCode: external_exports.string().optional().describe(
+    "VAT code (writes ProductItem.VatCode). WCG standard: '1' = standard 20% VAT. ALWAYS pass this for NC items \u2014 the tenant's 'Default Tax Code' system option is N/A, so if you omit it the product is created with VatCode=null and quote lines add without VAT. Every existing catalogue Y-code has VatCode='1'."
+  ),
+  purchaseAnalysis: external_exports.string().optional().describe(
+    "Access Dimensions purchase nominal (writes ProductItem.PurchaseAnalysis). WCG standard for furniture: '10-1-2006-000'. Match a comparable SKU via get_product_detail if unsure. ALWAYS pass this for NC items \u2014 without it, Access Dimensions rejects order conversion with 'Invalid product category'. Create-only: cannot be set via update_product afterwards (UpdateVisibility=never), only the Prospect UI."
+  ),
+  taxCode: external_exports.string().optional().describe(
+    "DEPRECATED \u2014 legacy alias for vatCode (there is no TaxCode property on ProductItem; earlier versions of this tool wrote a non-existent field and silently failed). Kept for back-compat; pass vatCode instead. If both are supplied, vatCode wins."
+  ),
   obsolete: external_exports.boolean().optional().default(false).describe("Mark obsolete on creation (default false)."),
   allowDuplicate: external_exports.boolean().optional().default(false).describe(
     "Suppress the manufacturer-reference duplicate guard. Default false: when manufacturerReference matches an existing product, the tool returns the existing code instead of creating a second SKU. Set true only for a genuine variant (same supplier code, different size/finish) where a duplicate is intentional."
@@ -24867,25 +24876,34 @@ async function createProduct(args) {
   if (args.alternateReference1 !== void 0) body.AlternateReference1 = args.alternateReference1;
   if (args.alternateReference2 !== void 0) body.AlternateReference2 = args.alternateReference2;
   if (args.barcode !== void 0) body.Barcode = args.barcode;
-  if (args.taxCode !== void 0) body.TaxCode = args.taxCode;
+  const resolvedVatCode = args.vatCode ?? args.taxCode;
+  if (resolvedVatCode !== void 0) body.VatCode = resolvedVatCode;
+  if (args.purchaseAnalysis !== void 0) body.PurchaseAnalysis = args.purchaseAnalysis;
   const created = await client.post("ProductItems", body);
   const check2 = await client.get(
     "ProductItems",
-    `$filter=ProductItemId eq '${code}'&$select=ProductItemId,Description,DecimalSellingPrice,DecimalCostPrice,Manufacturer,ManufacturerReference,CategoryId`
+    `$filter=ProductItemId eq '${code}'&$select=ProductItemId,Description,DecimalSellingPrice,DecimalCostPrice,Manufacturer,ManufacturerReference,CategoryId,VatCode,PurchaseAnalysis,SalesAnalysis`
   );
   const p = check2.value[0] ?? created;
   const sell = typeof p.DecimalSellingPrice === "number" ? `\xA3${p.DecimalSellingPrice.toFixed(2)}` : "N/A";
   const cost = typeof p.DecimalCostPrice === "number" ? `\xA3${p.DecimalCostPrice.toFixed(2)}` : "N/A";
-  const warn = sell === "\xA30.00" || cost === "\xA30.00" ? "\n\n\u26A0\uFE0F Sell or cost persisted as \xA30.00. SellingPrice / SellDecimals (raw integer fields) were sent but the server did not honour them \u2014 check the live row and the PRICE quirk note at the top of products.ts." : "";
+  const priceWarn = sell === "\xA30.00" || cost === "\xA30.00" ? "\n\n\u26A0\uFE0F Sell or cost persisted as \xA30.00. SellingPrice / SellDecimals (raw integer fields) were sent but the server did not honour them \u2014 check the live row and the PRICE quirk note at the top of products.ts." : "";
+  const nominalWarn = p.VatCode == null || p.PurchaseAnalysis == null ? `
+
+\u26A0\uFE0F ${p.VatCode == null ? "VatCode" : ""}${p.VatCode == null && p.PurchaseAnalysis == null ? " and " : ""}${p.PurchaseAnalysis == null ? "PurchaseAnalysis" : ""} came back null. Quote lines added with this SKU will ${p.VatCode == null ? "price at Gross=Net (no VAT applied)" : ""}${p.VatCode == null && p.PurchaseAnalysis == null ? ", and " : ""}${p.PurchaseAnalysis == null ? "Access Dimensions will reject order conversion with 'Invalid product category'" : ""}. Both fields are create-only on this entity \u2014 you'll need to set them in the Prospect UI (update_product cannot). Re-run with vatCode / purchaseAnalysis populated to fix at source.` : "";
   return [
     `Product created successfully!`,
     `**Code:** ${p.ProductItemId}`,
     `**Description:** ${p.Description}`,
     `**Sell:** ${sell} | **Cost:** ${cost} | **Margin:** ${margin}%`,
+    `**VAT code:** ${p.VatCode ?? "(null \u2014 order will not price with VAT)"}`,
+    `**Purchase Nominal:** ${p.PurchaseAnalysis ?? "(null \u2014 Dimensions will reject order)"}`,
+    `**Sales Nominal:** ${p.SalesAnalysis ?? "N/A"}`,
     `**Supplier:** ${p.Manufacturer ?? "N/A"} | **Mfr Ref:** ${p.ManufacturerReference ?? "N/A"}`,
     `**Category:** ${p.CategoryId ?? "N/A"}`,
     `**CRM Link:** ${toCrmLink(created.RecordLink)}`,
-    warn
+    priceWarn,
+    nominalWarn
   ].filter(Boolean).join("\n");
 }
 async function updateProduct(args) {
@@ -31587,7 +31605,7 @@ server.tool(
 );
 registerWriteTool(
   "create_product",
-  "Create a new product (ProductItem) in the catalogue. Use for bespoke / non-catalogue (NC) items before they go on a quote. Pass productItemId, or omit it with autoCode=true to auto-generate the next NC<DDMMYY><NN> code. Requires description, sellPrice, costPrice. Before inserting, the tool checks for an existing product with the same manufacturerReference (+ manufacturer when given) and short-circuits with `duplicate: true` + the existing code rather than creating a second SKU \u2014 set allowDuplicate=true only for a genuine variant.",
+  'Create a new product (ProductItem) in the catalogue. Use for bespoke / non-catalogue (NC) items before they go on a quote. Pass productItemId, or omit it with autoCode=true to auto-generate the next NC<DDMMYY><NN> code. Requires description, sellPrice, costPrice. **ALWAYS also pass `vatCode="1"` (standard 20% VAT) and `purchaseAnalysis="10-1-2006-000"` (WCG furniture Purchase Nominal)** \u2014 both are create-only POST fields (UpdateVisibility=never) and cannot be set afterwards via update_product. Without them the product ships with no VAT code (quote lines price at Gross=Net) and no Purchase Nominal (Access Dimensions rejects order conversion with \'Invalid product category\'). The legacy `taxCode` arg is a deprecated alias for `vatCode` \u2014 pre-v1.30.0 wrote a non-existent `TaxCode` property that silently failed. Before inserting, the tool checks for an existing product with the same manufacturerReference (+ manufacturer when given) and short-circuits with `duplicate: true` + the existing code rather than creating a second SKU \u2014 set allowDuplicate=true only for a genuine variant.',
   createProductSchema.shape,
   async (args) => {
     try {

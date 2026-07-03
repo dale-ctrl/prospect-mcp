@@ -118,7 +118,24 @@ export const createProductSchema = z.object({
   alternateReference1: z.string().optional().describe("Alternate reference 1."),
   alternateReference2: z.string().optional().describe("Alternate reference 2."),
   barcode: z.string().optional().describe("Barcode."),
-  taxCode: z.string().optional().describe("Tax / VAT code (defaults to the tenant standard if omitted)."),
+  vatCode: z
+    .string()
+    .optional()
+    .describe(
+      "VAT code (writes ProductItem.VatCode). WCG standard: '1' = standard 20% VAT. ALWAYS pass this for NC items — the tenant's 'Default Tax Code' system option is N/A, so if you omit it the product is created with VatCode=null and quote lines add without VAT. Every existing catalogue Y-code has VatCode='1'.",
+    ),
+  purchaseAnalysis: z
+    .string()
+    .optional()
+    .describe(
+      "Access Dimensions purchase nominal (writes ProductItem.PurchaseAnalysis). WCG standard for furniture: '10-1-2006-000'. Match a comparable SKU via get_product_detail if unsure. ALWAYS pass this for NC items — without it, Access Dimensions rejects order conversion with 'Invalid product category'. Create-only: cannot be set via update_product afterwards (UpdateVisibility=never), only the Prospect UI.",
+    ),
+  taxCode: z
+    .string()
+    .optional()
+    .describe(
+      "DEPRECATED — legacy alias for vatCode (there is no TaxCode property on ProductItem; earlier versions of this tool wrote a non-existent field and silently failed). Kept for back-compat; pass vatCode instead. If both are supplied, vatCode wins.",
+    ),
   obsolete: z.boolean().optional().default(false).describe("Mark obsolete on creation (default false)."),
   allowDuplicate: z
     .boolean()
@@ -238,22 +255,38 @@ export async function createProduct(args: z.infer<typeof createProductSchema>): 
   if (args.alternateReference1 !== undefined) body.AlternateReference1 = args.alternateReference1;
   if (args.alternateReference2 !== undefined) body.AlternateReference2 = args.alternateReference2;
   if (args.barcode !== undefined) body.Barcode = args.barcode;
-  if (args.taxCode !== undefined) body.TaxCode = args.taxCode;
+  // VatCode / PurchaseAnalysis: create-only POST fields (UpdateVisibility="never").
+  // Missing either causes downstream Access Dimensions to reject the order at
+  // conversion time with "Invalid product category" — see v1.29.0 skill notes.
+  // Pre-v1.30.0 wrote body.TaxCode which does NOT exist on ProductItem; the
+  // POST 400'd but the outer flow silently discarded the error, so products
+  // were created with VatCode=null. `taxCode` kept as a deprecated alias so
+  // existing callers keep working; vatCode wins when both are supplied.
+  const resolvedVatCode = args.vatCode ?? args.taxCode;
+  if (resolvedVatCode !== undefined) body.VatCode = resolvedVatCode;
+  if (args.purchaseAnalysis !== undefined) body.PurchaseAnalysis = args.purchaseAnalysis;
 
   const created = await client.post<Record<string, unknown>>("ProductItems", body);
 
-  // Read back so we report the persisted price, not just what we sent.
+  // Read back so we report the persisted price, VAT code, and purchase
+  // nominal — not just what we sent. Missing VatCode or PurchaseAnalysis is
+  // silently order-blocking (see comment above the POST body), so surface
+  // them in the response so the caller sees the round-tripped values.
   const check = await client.get<Record<string, unknown>>(
     "ProductItems",
-    `$filter=ProductItemId eq '${code}'&$select=ProductItemId,Description,DecimalSellingPrice,DecimalCostPrice,Manufacturer,ManufacturerReference,CategoryId`
+    `$filter=ProductItemId eq '${code}'&$select=ProductItemId,Description,DecimalSellingPrice,DecimalCostPrice,Manufacturer,ManufacturerReference,CategoryId,VatCode,PurchaseAnalysis,SalesAnalysis`
   );
   const p = check.value[0] ?? created;
   const sell = typeof p.DecimalSellingPrice === "number" ? `£${p.DecimalSellingPrice.toFixed(2)}` : "N/A";
   const cost = typeof p.DecimalCostPrice === "number" ? `£${p.DecimalCostPrice.toFixed(2)}` : "N/A";
 
-  const warn =
+  const priceWarn =
     sell === "£0.00" || cost === "£0.00"
       ? "\n\n⚠️ Sell or cost persisted as £0.00. SellingPrice / SellDecimals (raw integer fields) were sent but the server did not honour them — check the live row and the PRICE quirk note at the top of products.ts."
+      : "";
+  const nominalWarn =
+    p.VatCode == null || p.PurchaseAnalysis == null
+      ? `\n\n⚠️ ${p.VatCode == null ? "VatCode" : ""}${p.VatCode == null && p.PurchaseAnalysis == null ? " and " : ""}${p.PurchaseAnalysis == null ? "PurchaseAnalysis" : ""} came back null. Quote lines added with this SKU will ${p.VatCode == null ? "price at Gross=Net (no VAT applied)" : ""}${p.VatCode == null && p.PurchaseAnalysis == null ? ", and " : ""}${p.PurchaseAnalysis == null ? "Access Dimensions will reject order conversion with 'Invalid product category'" : ""}. Both fields are create-only on this entity — you'll need to set them in the Prospect UI (update_product cannot). Re-run with vatCode / purchaseAnalysis populated to fix at source.`
       : "";
 
   return [
@@ -261,10 +294,14 @@ export async function createProduct(args: z.infer<typeof createProductSchema>): 
     `**Code:** ${p.ProductItemId}`,
     `**Description:** ${p.Description}`,
     `**Sell:** ${sell} | **Cost:** ${cost} | **Margin:** ${margin}%`,
+    `**VAT code:** ${p.VatCode ?? "(null — order will not price with VAT)"}`,
+    `**Purchase Nominal:** ${p.PurchaseAnalysis ?? "(null — Dimensions will reject order)"}`,
+    `**Sales Nominal:** ${p.SalesAnalysis ?? "N/A"}`,
     `**Supplier:** ${p.Manufacturer ?? "N/A"} | **Mfr Ref:** ${p.ManufacturerReference ?? "N/A"}`,
     `**Category:** ${p.CategoryId ?? "N/A"}`,
     `**CRM Link:** ${toCrmLink(created.RecordLink as string | null | undefined)}`,
-    warn,
+    priceWarn,
+    nominalWarn,
   ]
     .filter(Boolean)
     .join("\n");

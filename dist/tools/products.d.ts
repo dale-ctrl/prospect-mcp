@@ -47,6 +47,8 @@ export declare const createProductSchema: z.ZodObject<{
     alternateReference1: z.ZodOptional<z.ZodString>;
     alternateReference2: z.ZodOptional<z.ZodString>;
     barcode: z.ZodOptional<z.ZodString>;
+    vatCode: z.ZodOptional<z.ZodString>;
+    purchaseAnalysis: z.ZodOptional<z.ZodString>;
     taxCode: z.ZodOptional<z.ZodString>;
     obsolete: z.ZodDefault<z.ZodOptional<z.ZodBoolean>>;
     allowDuplicate: z.ZodDefault<z.ZodOptional<z.ZodBoolean>>;
@@ -70,6 +72,8 @@ export declare const createProductSchema: z.ZodObject<{
     alternateReference1?: string | undefined;
     alternateReference2?: string | undefined;
     barcode?: string | undefined;
+    vatCode?: string | undefined;
+    purchaseAnalysis?: string | undefined;
 }, {
     description: string;
     costPrice: number;
@@ -88,6 +92,8 @@ export declare const createProductSchema: z.ZodObject<{
     alternateReference1?: string | undefined;
     alternateReference2?: string | undefined;
     barcode?: string | undefined;
+    vatCode?: string | undefined;
+    purchaseAnalysis?: string | undefined;
     obsolete?: boolean | undefined;
     allowDuplicate?: boolean | undefined;
 }>;

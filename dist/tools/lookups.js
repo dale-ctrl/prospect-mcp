@@ -198,7 +198,7 @@ export async function getProductDetail(args) {
         "Barcode", "Sku",
         "AlternateReference1", "AlternateReference2", "AlternateReference3", "AlternateReference4",
         "Stocked", "Sellable", "UnitDescription",
-        "SalesAnalysis", "PurchaseAnalysis",
+        "SalesAnalysis", "PurchaseAnalysis", "VatCode",
         "Obsolete", "LastUpdated",
     ].join(",");
     const params = `$filter=ProductItemId eq '${code.replace(/'/g, "''")}'&$select=${select}&$top=1`;
@@ -219,7 +219,7 @@ export async function getProductDetail(args) {
         `## Pricing`,
         `**Sell:** ${money(p.DecimalSellingPrice)} | **Cost:** ${money(p.DecimalCostPrice)} | **Purchase Cost:** ${money(p.DecimalPurchaseCostPrice)}`,
         `**Unit:** ${p.UnitDescription || "N/A"} | **Category:** ${p.CategoryId || "N/A"}`,
-        `**Sales Nominal:** ${p.SalesAnalysis ?? "N/A"} | **Purchase Nominal:** ${p.PurchaseAnalysis ?? "N/A"}`,
+        `**Sales Nominal:** ${p.SalesAnalysis ?? "N/A"} | **Purchase Nominal:** ${p.PurchaseAnalysis ?? "N/A"} | **VAT code:** ${p.VatCode ?? "N/A"}`,
     ].join("\n");
     const supplier = [
         `## Supplier`,
