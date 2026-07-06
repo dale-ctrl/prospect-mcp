@@ -140,13 +140,28 @@ create_product(
   manufacturer="Hawk Furniture",
   manufacturerReference="WESTCOUNTRY-31797",
   unitDescription="Each",
-  vatCode="1",                       # ALWAYS pass — standard 20% VAT (WCG default)
   categoryId="<defaults to STOCK if omitted; match a comparable SKU via get_product_categories>",
-  salesAnalysis="10-1-1230-000",     # WCG furniture sales nominal (or match comparable SKU)
-  purchaseAnalysis="10-1-2006-000",  # ALWAYS pass — WCG furniture purchase nominal
+  salesAnalysis="10-1-1230-000",    # valid Dimensions sales nominal — ALWAYS pass one
+  vatCode="1",                      # defaults to "1" (20%) if omitted (v1.32.0)
+  purchaseAnalysis="10-1-2006-000", # defaults to WCG furniture nominal if omitted (v1.32.0)
+  # type defaults to "STOCK" (v1.31.0) — leave default for furniture
   extendedDescription="<optional product blurb>"
 )
 ```
+
+> **Fields REQUIRED for Access Dimensions order conversion.** A bespoke NC product will NOT
+> convert to a Dimensions order — it fails with `System.Exception: Invalid product category`
+> at `ConfirmOfflineOrdersItem.CreateOrder` — unless ALL of these are set at creation:
+> - **Type (prodtype) = "STOCK"** — `create_product` defaults this (v1.31.0).
+> - **VatCode = "1"** (standard 20%) — `create_product` defaults this (v1.32.0); override only for zero-rated.
+> - **PurchaseAnalysis = "10-1-2006-000"** (WCG furniture purchase nominal) — `create_product` defaults this (v1.32.0); override for non-furniture.
+> - **SalesAnalysis** — a valid Dimensions sales nominal (e.g. `10-1-1230-000`). NOT defaulted; always pass one.
+>
+> All four are **create-only** (`UpdateVisibility="never"`) — they cannot be patched via
+> `update_product` or edited in the Prospect UI after creation. A product missing any of them
+> must be **recreated** with the current tool, the old code obsoleted, and its quote line swapped.
+> Confirm a good create: the `create_product` response shows `Category: STOCK | Type: STOCK`
+> plus the VAT and nominal lines.
 
 Always pass `manufacturer` + `manufacturerReference` — they power the §1 duplicate check (and the
 server-side guard) for the next person. If the manufacturer reference already exists in the
@@ -477,8 +492,28 @@ fields the tenant configures under "Custom Fields" on a ProductItem. Counterpart
 - **`&` in search_products searchTerm returns HTTP 400** — the OData filter breaks
   ("unterminated string literal"). Search a substring without the ampersand, e.g. `DEL,RP`
   instead of `DEL,RP&ASSEM`.
+- **"Invalid product category" at order conversion** — the product has `Type=null` and/or is
+  missing `VatCode` / `PurchaseAnalysis`. Access Dimensions validates `prodtype` separately from
+  `CategoryId`, so the line fails even though the category shows "STOCK". Fix: recreate with the
+  current tool (these fields are create-only — cannot be patched), obsolete the old code, and swap
+  its quote line. As of v1.31.0/v1.32.0 the tool sets Type/VatCode/PurchaseAnalysis by default, so
+  new NC codes convert out of the box — but always still pass a valid `salesAnalysis`.
+- **New NC product shows Obsolete after creation** — verify `Obsolete=no` (via
+  `get_product_detail`) before converting. Seen once (2026-07-06) with no enabled automation
+  behind it; reactivate via `update_product(productItemId=..., obsolete=false)` and re-check.
 
 ## Changelog
+- **2026-07-06 (v2.6)** — Access Dimensions order-conversion field requirements folded into the
+  defaults. `create_product` now defaults `vatCode="1"` AND `purchaseAnalysis="10-1-2006-000"`
+  (v1.32.0) so a caller who omits both still gets a Dimensions-convertible product; `type` was
+  already defaulting to `"STOCK"` in v1.31.0. Overridable individually for zero-rated /
+  non-furniture / non-stock items. Added the §4 "Fields REQUIRED for Dimensions conversion"
+  callout naming all four order-critical fields (Type + VatCode + PurchaseAnalysis + valid
+  SalesAnalysis, the last of which is NOT defaulted — always still pass one). Added two Pitfalls
+  entries: "Invalid product category at order conversion" (root cause + fix), and "New NC product
+  shows Obsolete after creation" (seen once, no known automation, reactivate via update_product).
+  Example call updated. Root-caused on quote 15936 (Marpool Primary) via the incremental
+  discoveries in v1.30.0 (VatCode/PurchaseAnalysis property-name fix) and v1.31.0 (Type/prodtype).
 - **2026-07-06 (v2.5)** — Diagnosed and fixed the LAST create-only field left blank on
   MCP-created products: `Type` / prodtype. Access Dimensions checks `Type` separately from
   `CategoryId` and rejects order conversion with "Invalid product category" when Type is null,

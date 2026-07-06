@@ -6,6 +6,29 @@ The format is based on Keep a Changelog, and this project adheres to Semantic Ve
 
 ## [Unreleased]
 
+## [1.32.0] - 2026-07-06
+### Changed — `create_product` now defaults `vatCode` + `purchaseAnalysis`
+
+Same-day follow-up to v1.31.0. With `type` already defaulting to `"STOCK"` (v1.31.0), a caller who omits `vatCode` and `purchaseAnalysis` still had to remember two more values to get a Dimensions-convertible product. v1.32.0 defaults those too, so an omitting-caller now gets a working NC out of the box.
+
+#### Defaults
+- **`vatCode`** defaults to `"1"` (standard 20% VAT). Override for zero-rated / reduced-rate / exempt.
+- **`purchaseAnalysis`** defaults to `"10-1-2006-000"` (WCG furniture purchase nominal). Override for non-furniture.
+- `type` was already defaulting to `"STOCK"` in v1.31.0. Together, the three fields that were previously silent order-blockers are now defaulted.
+- **`salesAnalysis` is NOT defaulted** — the correct value depends on what's being sold (`10-1-1230-000` for bespoke tables, `10-1-1270-000` for chairs, etc.). Always pass a valid one.
+
+#### Handler-side defaults preserve the taxCode alias
+Applied as `?? "1"` / `?? "10-1-2006-000"` in the handler rather than Zod `.default(...)` on the schema, so an explicit `taxCode` alias still wins over the vatCode default. Resolution order stays: `vatCode → taxCode → "1"`.
+
+#### Docs
+- `create_product` tool description spells out the three defaults and the salesAnalysis-you-still-must-pass rule.
+- Schema `describe(...)` strings for `vatCode` and `purchaseAnalysis` updated to note the defaults and when to override.
+- `skills/prospect-crm-create-product/SKILL.md` → v2.6. §4 gets a new "Fields REQUIRED for Access Dimensions order conversion" callout listing all four order-critical create-only fields with their current default state. Example call updated. Two new Pitfalls: "Invalid product category at order conversion" (root cause + fix) and "New NC product shows Obsolete after creation" (seen once, no known automation).
+- `skills/prospect-crm-create-quote/SKILL.md` → v6.1. §5 gets a cross-reference callout warning that hand-built NC products still need all four fields — the defaults only apply when `create_product` is the entry point.
+
+#### Live smoke test (see the release for command)
+`create_product(autoCode=true, description="...", sellPrice=10, costPrice=5, salesAnalysis="10-1-1230-000")` — with no `vatCode`, no `purchaseAnalysis`, no `type` — must come back with `VatCode="1"`, `PurchaseAnalysis="10-1-2006-000"`, `Type="STOCK"`, then obsolete the throwaway.
+
 ## [1.31.0] - 2026-07-06
 ### Fixed — `create_product` now sets `Type` (prodtype) + the UI form's other create-only defaults
 

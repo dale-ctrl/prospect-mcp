@@ -106,11 +106,11 @@ export const createProductSchema = z.object({
     vatCode: z
         .string()
         .optional()
-        .describe("VAT code (writes ProductItem.VatCode). WCG standard: '1' = standard 20% VAT. ALWAYS pass this for NC items — the tenant's 'Default Tax Code' system option is N/A, so if you omit it the product is created with VatCode=null and quote lines add without VAT. Every existing catalogue Y-code has VatCode='1'."),
+        .describe("VAT code (writes ProductItem.VatCode). WCG standard: '1' = standard 20% VAT. Defaults to '1' when omitted (v1.32.0), so a caller who leaves it blank still gets a Dimensions-convertible product. Override for zero-rated (0), reduced-rate, or exempt items. Every existing catalogue Y-code has VatCode='1'."),
     purchaseAnalysis: z
         .string()
         .optional()
-        .describe("Access Dimensions purchase nominal (writes ProductItem.PurchaseAnalysis). WCG standard for furniture: '10-1-2006-000'. Match a comparable SKU via get_product_detail if unsure. ALWAYS pass this for NC items — without it, Access Dimensions rejects order conversion with 'Invalid product category'. Create-only: cannot be set via update_product afterwards (UpdateVisibility=never), only the Prospect UI."),
+        .describe("Access Dimensions purchase nominal (writes ProductItem.PurchaseAnalysis). WCG furniture standard: '10-1-2006-000'. Defaults to '10-1-2006-000' when omitted (v1.32.0). Override for non-furniture. Create-only: cannot be set via update_product afterwards (UpdateVisibility=never), only the Prospect UI."),
     taxCode: z
         .string()
         .optional()
@@ -257,11 +257,17 @@ export async function createProduct(args) {
     // POST 400'd but the outer flow silently discarded the error, so products
     // were created with VatCode=null. `taxCode` kept as a deprecated alias so
     // existing callers keep working; vatCode wins when both are supplied.
-    const resolvedVatCode = args.vatCode ?? args.taxCode;
-    if (resolvedVatCode !== undefined)
-        body.VatCode = resolvedVatCode;
-    if (args.purchaseAnalysis !== undefined)
-        body.PurchaseAnalysis = args.purchaseAnalysis;
+    //
+    // v1.32.0: default vatCode="1" (standard 20% VAT) and
+    // purchaseAnalysis="10-1-2006-000" (WCG furniture purchase nominal) so a
+    // caller who omits both still gets a Dimensions-convertible product.
+    // Defaults assume WCG furniture; override for zero-rated / non-furniture.
+    // Handler-side (not Zod .default) so an explicit taxCode alias still wins
+    // over the vatCode default: vatCode → taxCode → "1".
+    const resolvedVatCode = args.vatCode ?? args.taxCode ?? "1";
+    body.VatCode = resolvedVatCode;
+    const resolvedPurchaseAnalysis = args.purchaseAnalysis ?? "10-1-2006-000";
+    body.PurchaseAnalysis = resolvedPurchaseAnalysis;
     const created = await client.post("ProductItems", body);
     // Read back so we report the persisted price, VAT code, and purchase
     // nominal — not just what we sent. Missing VatCode or PurchaseAnalysis is

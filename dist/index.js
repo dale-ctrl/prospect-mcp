@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// prospect-crm-mcp v1.31.0 — bundled by esbuild on 2026-07-06T08:24:44.634Z
+// prospect-crm-mcp v1.32.0 — bundled by esbuild on 2026-07-06T09:13:24.131Z
 // Single-file MCP server; no node_modules required at runtime.
 var __create = Object.create;
 var __defProp = Object.defineProperty;
@@ -24781,10 +24781,10 @@ var createProductSchema = external_exports.object({
   alternateReference2: external_exports.string().optional().describe("Alternate reference 2."),
   barcode: external_exports.string().optional().describe("Barcode."),
   vatCode: external_exports.string().optional().describe(
-    "VAT code (writes ProductItem.VatCode). WCG standard: '1' = standard 20% VAT. ALWAYS pass this for NC items \u2014 the tenant's 'Default Tax Code' system option is N/A, so if you omit it the product is created with VatCode=null and quote lines add without VAT. Every existing catalogue Y-code has VatCode='1'."
+    "VAT code (writes ProductItem.VatCode). WCG standard: '1' = standard 20% VAT. Defaults to '1' when omitted (v1.32.0), so a caller who leaves it blank still gets a Dimensions-convertible product. Override for zero-rated (0), reduced-rate, or exempt items. Every existing catalogue Y-code has VatCode='1'."
   ),
   purchaseAnalysis: external_exports.string().optional().describe(
-    "Access Dimensions purchase nominal (writes ProductItem.PurchaseAnalysis). WCG standard for furniture: '10-1-2006-000'. Match a comparable SKU via get_product_detail if unsure. ALWAYS pass this for NC items \u2014 without it, Access Dimensions rejects order conversion with 'Invalid product category'. Create-only: cannot be set via update_product afterwards (UpdateVisibility=never), only the Prospect UI."
+    "Access Dimensions purchase nominal (writes ProductItem.PurchaseAnalysis). WCG furniture standard: '10-1-2006-000'. Defaults to '10-1-2006-000' when omitted (v1.32.0). Override for non-furniture. Create-only: cannot be set via update_product afterwards (UpdateVisibility=never), only the Prospect UI."
   ),
   taxCode: external_exports.string().optional().describe(
     "DEPRECATED \u2014 legacy alias for vatCode (there is no TaxCode property on ProductItem; earlier versions of this tool wrote a non-existent field and silently failed). Kept for back-compat; pass vatCode instead. If both are supplied, vatCode wins."
@@ -24902,9 +24902,10 @@ async function createProduct(args) {
   if (args.alternateReference1 !== void 0) body.AlternateReference1 = args.alternateReference1;
   if (args.alternateReference2 !== void 0) body.AlternateReference2 = args.alternateReference2;
   if (args.barcode !== void 0) body.Barcode = args.barcode;
-  const resolvedVatCode = args.vatCode ?? args.taxCode;
-  if (resolvedVatCode !== void 0) body.VatCode = resolvedVatCode;
-  if (args.purchaseAnalysis !== void 0) body.PurchaseAnalysis = args.purchaseAnalysis;
+  const resolvedVatCode = args.vatCode ?? args.taxCode ?? "1";
+  body.VatCode = resolvedVatCode;
+  const resolvedPurchaseAnalysis = args.purchaseAnalysis ?? "10-1-2006-000";
+  body.PurchaseAnalysis = resolvedPurchaseAnalysis;
   const created = await client.post("ProductItems", body);
   const check2 = await client.get(
     "ProductItems",
@@ -31635,7 +31636,7 @@ server.tool(
 );
 registerWriteTool(
   "create_product",
-  'Create a new product (ProductItem) in the catalogue. Use for bespoke / non-catalogue (NC) items before they go on a quote. Pass productItemId, or omit it with autoCode=true to auto-generate the next NC<DDMMYY><NN> code. Requires description, sellPrice, costPrice. **ALWAYS also pass `vatCode="1"` (standard 20% VAT) and `purchaseAnalysis="10-1-2006-000"` (WCG furniture Purchase Nominal)** \u2014 both are create-only POST fields (UpdateVisibility=never) and cannot be set afterwards via update_product. Without them the product ships with no VAT code (quote lines price at Gross=Net) and no Purchase Nominal (Access Dimensions rejects order conversion with \'Invalid product category\'). The legacy `taxCode` arg is a deprecated alias for `vatCode` \u2014 pre-v1.30.0 wrote a non-existent `TaxCode` property that silently failed. Before inserting, the tool checks for an existing product with the same manufacturerReference (+ manufacturer when given) and short-circuits with `duplicate: true` + the existing code rather than creating a second SKU \u2014 set allowDuplicate=true only for a genuine variant.',
+  'Create a new product (ProductItem) in the catalogue. Use for bespoke / non-catalogue (NC) items before they go on a quote. Pass productItemId, or omit it with autoCode=true to auto-generate the next NC<DDMMYY><NN> code. Requires description, sellPrice, costPrice. As of v1.32.0 the three Access-Dimensions-critical create-only fields are defaulted so a caller who omits them still gets a Dimensions-convertible product: `vatCode` defaults `"1"` (standard 20% VAT), `purchaseAnalysis` defaults `"10-1-2006-000"` (WCG furniture Purchase Nominal), and `type` defaults `"STOCK"` (v1.31.0). Override any of them for non-furniture / zero-rated / non-stock items. ALWAYS pass a valid `salesAnalysis` (Dimensions sales nominal, e.g. `"10-1-1230-000"`) \u2014 that one is NOT defaulted. All four are create-only (UpdateVisibility=never) and cannot be repaired via update_product; a product missing any must be recreated and the old one obsoleted. The legacy `taxCode` arg is a deprecated alias for `vatCode` \u2014 pre-v1.30.0 wrote a non-existent `TaxCode` property that silently failed. Before inserting, the tool checks for an existing product with the same manufacturerReference (+ manufacturer when given) and short-circuits with `duplicate: true` + the existing code rather than creating a second SKU \u2014 set allowDuplicate=true only for a genuine variant.',
   createProductSchema.shape,
   async (args) => {
     try {

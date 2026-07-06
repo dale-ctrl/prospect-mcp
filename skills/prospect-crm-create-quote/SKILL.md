@@ -234,6 +234,11 @@ The same UI-only escape applies to toggle fixes (see Pitfall 14).
 
 ### 5. Add each product line at creation time
 
+> **NC codes must be Dimensions-ready.** Any new NC product added to a quote must carry Type +
+> VatCode + PurchaseAnalysis + SalesAnalysis or the order won't convert ("Invalid product
+> category"). `create_product` now defaults these (v1.31.0/v1.32.0) — see the
+> prospect-crm-create-product skill. Don't hand-build NC products without them.
+
 Before each `add_quote_line` call, **state in chat what you're about to add** — this gives the
 user the chance to pause if they're editing the quote concurrently in the UI (Pitfall 1).
 
@@ -694,6 +699,13 @@ End every quote-creation session with:
 
 ## Changelog
 
+- **2026-07-06 (v6.1)** — Added the §5 "NC codes must be Dimensions-ready" cross-reference
+  callout naming the four order-conversion-critical create-only ProductItem fields (Type,
+  VatCode, PurchaseAnalysis, SalesAnalysis). MCP v1.31.0/v1.32.0 now default the first three
+  in `create_product` but SalesAnalysis is NOT defaulted — always still pass one. Anyone
+  hand-building an NC product outside the tool must set all four or Access Dimensions rejects
+  the line at conversion with "Invalid product category". Points readers at the
+  prospect-crm-create-product skill for the full field-by-field explanation.
 - **2026-07-03 (v6)** — Added "Amending an existing quote (raising a new version)" section from
   the Monkerton session (quote 15782 → 16077): use `duplicate_quote`, with its three live-observed
   quirks (sequence not preserved; copied line costs reset to catalogue; Price Expiry copies as
