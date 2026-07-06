@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// prospect-crm-mcp v1.30.0 — bundled by esbuild on 2026-07-03T16:10:16.771Z
+// prospect-crm-mcp v1.31.0 — bundled by esbuild on 2026-07-06T08:24:44.634Z
 // Single-file MCP server; no node_modules required at runtime.
 var __create = Object.create;
 var __defProp = Object.defineProperty;
@@ -22370,6 +22370,7 @@ async function getProductDetail(args) {
     "SalesAnalysis",
     "PurchaseAnalysis",
     "VatCode",
+    "Type",
     "Obsolete",
     "LastUpdated"
   ].join(",");
@@ -22392,7 +22393,7 @@ ${text}
   const pricing = [
     `## Pricing`,
     `**Sell:** ${money(p.DecimalSellingPrice)} | **Cost:** ${money(p.DecimalCostPrice)} | **Purchase Cost:** ${money(p.DecimalPurchaseCostPrice)}`,
-    `**Unit:** ${p.UnitDescription || "N/A"} | **Category:** ${p.CategoryId || "N/A"}`,
+    `**Unit:** ${p.UnitDescription || "N/A"} | **Category:** ${p.CategoryId || "N/A"} | **Type:** ${p.Type ?? "(null \u2014 Dimensions will reject order conversion)"}`,
     `**Sales Nominal:** ${p.SalesAnalysis ?? "N/A"} | **Purchase Nominal:** ${p.PurchaseAnalysis ?? "N/A"} | **VAT code:** ${p.VatCode ?? "N/A"}`
   ].join("\n");
   const supplier = [
@@ -24788,6 +24789,9 @@ var createProductSchema = external_exports.object({
   taxCode: external_exports.string().optional().describe(
     "DEPRECATED \u2014 legacy alias for vatCode (there is no TaxCode property on ProductItem; earlier versions of this tool wrote a non-existent field and silently failed). Kept for back-compat; pass vatCode instead. If both are supplied, vatCode wins."
   ),
+  type: external_exports.string().optional().default("STOCK").describe(
+    "Product type / prodtype \u2014 writes ProductItem.Type. Access Dimensions validates this at order conversion time and rejects the line with 'Invalid product category' when it's null (root cause of the NC06072602 / 2026-07-06 order-conversion failure, even after v1.30.0 fixed VatCode + PurchaseAnalysis). Every UI-created stock item has Type='STOCK'; MCP-created items pre-v1.31.0 came back with Type=null because the field wasn't in the POST body. Create-only (UpdateVisibility='never'), like VatCode / PurchaseAnalysis \u2014 cannot be repaired by update_product; recreate the product if you need to change it. Default 'STOCK' matches every WCG Y-code catalogue item."
+  ),
   obsolete: external_exports.boolean().optional().default(false).describe("Mark obsolete on creation (default false)."),
   allowDuplicate: external_exports.boolean().optional().default(false).describe(
     "Suppress the manufacturer-reference duplicate guard. Default false: when manufacturerReference matches an existing product, the tool returns the existing code instead of creating a second SKU. Set true only for a genuine variant (same supplier code, different size/finish) where a duplicate is intentional."
@@ -24860,6 +24864,28 @@ async function createProduct(args) {
     Description: args.description,
     CategoryId: args.categoryId,
     // schema defaults to "STOCK"; server requires it
+    // Type / prodtype (Edm.String, UpdateVisibility='never'). Root cause of the
+    // NC06072602 order-conversion failure — Access Dimensions rejects with
+    // "Invalid product category" when Type is null, EVEN with a good CategoryId,
+    // VatCode, and PurchaseAnalysis. UI-created stock items always have
+    // Type='STOCK'. Diff of Y100201 vs NC06072602 (2026-07-06) had this as the
+    // one remaining suspect after v1.30.0 landed. Schema defaults `type` to
+    // 'STOCK'; expose via arg so someone can pick a different value if the
+    // tenant ever configures other product types.
+    Type: args.type,
+    // The block below matches the UI's own product-form defaults, cross-checked
+    // against Y100201 (which has been through the full UI flow + Dimensions
+    // sync). All UpdateVisibility='never', so we set them here or never. Values
+    // are hardcoded rather than schema args because they're WCG conventions
+    // that nobody would want to change per-product.
+    Pack: "1",
+    AllowSplit: 1,
+    AllowLineDiscount: 1,
+    AllowOverallDiscount: 1,
+    AllowSettlementDiscount: 1,
+    QuantityDecimal: 3,
+    QuantityFactor: 1,
+    UnitWeightDecimals: 4,
     SellingPrice: toRawPrice(args.sellPrice),
     SellDecimals: PRICE_DECIMALS,
     CostPrice: toRawPrice(args.costPrice),
@@ -24882,7 +24908,7 @@ async function createProduct(args) {
   const created = await client.post("ProductItems", body);
   const check2 = await client.get(
     "ProductItems",
-    `$filter=ProductItemId eq '${code}'&$select=ProductItemId,Description,DecimalSellingPrice,DecimalCostPrice,Manufacturer,ManufacturerReference,CategoryId,VatCode,PurchaseAnalysis,SalesAnalysis`
+    `$filter=ProductItemId eq '${code}'&$select=ProductItemId,Description,DecimalSellingPrice,DecimalCostPrice,Manufacturer,ManufacturerReference,CategoryId,VatCode,PurchaseAnalysis,SalesAnalysis,Type`
   );
   const p = check2.value[0] ?? created;
   const sell = typeof p.DecimalSellingPrice === "number" ? `\xA3${p.DecimalSellingPrice.toFixed(2)}` : "N/A";
@@ -24891,6 +24917,9 @@ async function createProduct(args) {
   const nominalWarn = p.VatCode == null || p.PurchaseAnalysis == null ? `
 
 \u26A0\uFE0F ${p.VatCode == null ? "VatCode" : ""}${p.VatCode == null && p.PurchaseAnalysis == null ? " and " : ""}${p.PurchaseAnalysis == null ? "PurchaseAnalysis" : ""} came back null. Quote lines added with this SKU will ${p.VatCode == null ? "price at Gross=Net (no VAT applied)" : ""}${p.VatCode == null && p.PurchaseAnalysis == null ? ", and " : ""}${p.PurchaseAnalysis == null ? "Access Dimensions will reject order conversion with 'Invalid product category'" : ""}. Both fields are create-only on this entity \u2014 you'll need to set them in the Prospect UI (update_product cannot). Re-run with vatCode / purchaseAnalysis populated to fix at source.` : "";
+  const typeWarn = p.Type == null ? `
+
+\u26A0\uFE0F Type came back null. Access Dimensions will reject order conversion with 'Invalid product category' regardless of VatCode / PurchaseAnalysis (that was the NC06072602 breakage \u2014 root cause diagnosed 2026-07-06). Create-only field \u2014 cannot be repaired via update_product; recreate the product with type='STOCK' set to fix.` : "";
   return [
     `Product created successfully!`,
     `**Code:** ${p.ProductItemId}`,
@@ -24899,11 +24928,12 @@ async function createProduct(args) {
     `**VAT code:** ${p.VatCode ?? "(null \u2014 order will not price with VAT)"}`,
     `**Purchase Nominal:** ${p.PurchaseAnalysis ?? "(null \u2014 Dimensions will reject order)"}`,
     `**Sales Nominal:** ${p.SalesAnalysis ?? "N/A"}`,
+    `**Category:** ${p.CategoryId ?? "N/A"} | **Type:** ${p.Type ?? "(null \u2014 Dimensions will reject order)"}`,
     `**Supplier:** ${p.Manufacturer ?? "N/A"} | **Mfr Ref:** ${p.ManufacturerReference ?? "N/A"}`,
-    `**Category:** ${p.CategoryId ?? "N/A"}`,
     `**CRM Link:** ${toCrmLink(created.RecordLink)}`,
     priceWarn,
-    nominalWarn
+    nominalWarn,
+    typeWarn
   ].filter(Boolean).join("\n");
 }
 async function updateProduct(args) {

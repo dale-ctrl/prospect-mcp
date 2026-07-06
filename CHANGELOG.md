@@ -6,6 +6,47 @@ The format is based on Keep a Changelog, and this project adheres to Semantic Ve
 
 ## [Unreleased]
 
+## [1.31.0] - 2026-07-06
+### Fixed — `create_product` now sets `Type` (prodtype) + the UI form's other create-only defaults
+
+Same failure mode as v1.30.0's VAT/nominal fix (Access Dimensions rejecting order conversion with `System.Exception: Invalid product category`), a different root cause. On 2026-07-06 an NC product (`NC06072602`) hit the same error even though v1.30.0's VatCode + PurchaseAnalysis fix was in place. Systematic diff pinned it down.
+
+#### Root cause — field-by-field diff of Y100201 (UI-created, converts fine) vs NC06072602 (MCP-created, fails)
+Ignoring the expected differences per Dale's brief (prices, descriptions, identifiers, etc.) and after ruling out the already-tested-null-effect candidates (`prodcateg`, `stocked`, `sellable`, `qtytype`, `vatcode`, `defaultwarehouse`, `magicmatrixcat`), 10 columns remained different. **One was Dale's prime suspect `prodtype`** — Y100201 has `Type="STOCK"`, NC06072602 has `Type=null`. Access Dimensions checks `Type` separately from `CategoryId` (which was set correctly on both) and treats null-Type as an invalid product category. `Type` is `meta:UpdateVisibility="never"` — create-only, so `update_product` cannot repair a legacy product; recreate to fix.
+
+The related-record probes turned up one gap (`ProductMonthlys` had a row for Y100201 and none for NC06072602) but that's a symptom, not a cause — `ProductMonthlys` is a monthly sales-history aggregate populated by the batch reporting flow; Y100201 has past sales, NC06072602 doesn't. Ignored.
+
+#### Fix — 9 new create-only field defaults in the POST body
+`create_product` now writes the following on every POST, cross-checked against Y100201's shape:
+
+| Field | Value | Notes |
+|---|---|---|
+| `Type` | `"STOCK"` (default) | **Root cause fix.** Configurable via new `type` schema arg for future non-stock use cases. |
+| `Pack` | `"1"` | UI form default. |
+| `AllowSplit` | `1` | UI form default. |
+| `AllowLineDiscount` | `1` | UI form default. |
+| `AllowOverallDiscount` | `1` | UI form default. |
+| `AllowSettlementDiscount` | `1` | UI form default. |
+| `QuantityDecimal` | `3` | UI form default. |
+| `QuantityFactor` | `1` | UI form default. |
+| `UnitWeightDecimals` | `4` | UI form default. |
+
+The 8 non-`Type` defaults are hardcoded (WCG conventions with no per-product variance); `type` is exposed as a schema param for symmetry with `vatCode` / `purchaseAnalysis` and in case the tenant ever adds non-STOCK product types.
+
+#### Read-back surfacing
+Both `create_product`'s response and `get_product_detail` now display `**Type:**` alongside Category. `create_product` also emits an explicit warning line when `Type` comes back null, naming the exact downstream failure (as v1.30.0 does for VatCode / PurchaseAnalysis).
+
+#### Live smoke test (throwaway NC06072606, obsoleted after)
+- `create_product(autoCode=true, sellPrice=10, costPrice=5, vatCode="1", salesAnalysis="10-1-1230-000", purchaseAnalysis="10-1-2006-000", categoryId="STOCK")` (defaults `type="STOCK"`) → 200 OK.
+- Read-back matched Y100201 on all 9 new fields plus VatCode / PurchaseAnalysis / CategoryId — full parity with a legit UI-created product.
+
+#### Recovery for legacy blanks
+NC06072602 and any other pre-v1.31.0 MCP-created products with `Type=null` cannot be fixed by `update_product` (create-only). Options: (a) recreate via the fixed tool then obsolete the broken original; (b) fix directly in the Prospect UI if there's an admin path (the standard product-edit form may not surface `Type`).
+
+#### Skill + knowledge-base updates
+- `skills/prospect-crm-create-product/SKILL.md` → v2.5. §4 header cites v1.31.0; Pitfalls entry extended with the Type/prodtype rule and the recovery caveat.
+- Quoting-lesson saved via `save_quoting_lesson` (category `configuration`) — future sessions inherit the "Type is a THIRD order-conversion-critical create-only field beyond VatCode + PurchaseAnalysis" rule from the CRM knowledge base.
+
 ## [1.30.0] - 2026-07-03
 ### Fixed — `create_product` VAT code and Purchase Nominal now actually persist
 

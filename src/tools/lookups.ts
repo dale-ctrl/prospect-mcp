@@ -249,7 +249,7 @@ export async function getProductDetail(args: z.infer<typeof getProductDetailSche
     "Barcode", "Sku",
     "AlternateReference1", "AlternateReference2", "AlternateReference3", "AlternateReference4",
     "Stocked", "Sellable", "UnitDescription",
-    "SalesAnalysis", "PurchaseAnalysis", "VatCode",
+    "SalesAnalysis", "PurchaseAnalysis", "VatCode", "Type",
     "Obsolete", "LastUpdated",
   ].join(",");
 
@@ -274,7 +274,7 @@ export async function getProductDetail(args: z.infer<typeof getProductDetailSche
   const pricing = [
     `## Pricing`,
     `**Sell:** ${money(p.DecimalSellingPrice)} | **Cost:** ${money(p.DecimalCostPrice)} | **Purchase Cost:** ${money(p.DecimalPurchaseCostPrice)}`,
-    `**Unit:** ${p.UnitDescription || "N/A"} | **Category:** ${p.CategoryId || "N/A"}`,
+    `**Unit:** ${p.UnitDescription || "N/A"} | **Category:** ${p.CategoryId || "N/A"} | **Type:** ${p.Type ?? "(null — Dimensions will reject order conversion)"}`,
     `**Sales Nominal:** ${p.SalesAnalysis ?? "N/A"} | **Purchase Nominal:** ${p.PurchaseAnalysis ?? "N/A"} | **VAT code:** ${p.VatCode ?? "N/A"}`,
   ].join("\n");
 

@@ -129,7 +129,7 @@ lookup. Record in the product/quote memo that it's bespoke and where the price c
 
 ## 4. Create the product
 
-**Preferred — `create_product` MCP tool** (deployed v1.21.0; fixes v1.22.0; duplicate guard v1.24.0; VAT + Purchase Nominal in v1.30.0):
+**Preferred — `create_product` MCP tool** (deployed v1.21.0; fixes v1.22.0; duplicate guard v1.24.0; VAT + Purchase Nominal in v1.30.0; `Type` / prodtype + UI-form defaults in v1.31.0):
 
 ```
 create_product(
@@ -466,11 +466,33 @@ fields the tenant configures under "Custom Fields" on a ProductItem. Counterpart
   created without them — only the Prospect UI. The pre-v1.30.0 `taxCode` arg is a deprecated
   alias for `vatCode` that used to silently write a non-existent `TaxCode` property (Monkerton
   NC03072601 broke this way — VatCode landed as null).
+- **`Type` (prodtype) is ALSO order-critical** — as of v1.31.0 the tool defaults `Type="STOCK"`
+  on every POST (matches every WCG Y-code catalogue item). Access Dimensions checks this field
+  separately from `CategoryId` and rejects with the same "Invalid product category" error when
+  it's null, EVEN with VatCode, PurchaseAnalysis, and CategoryId all correct (that was the
+  NC06072602 breakage, diagnosed by field-by-field diff against Y100201 on 2026-07-06).
+  Create-only field, no recovery via `update_product` — a legacy product with `Type=null` has
+  to be recreated. `create_product` and `get_product_detail` now surface `**Type:**` in the
+  response so you can verify it's populated in one call.
 - **`&` in search_products searchTerm returns HTTP 400** — the OData filter breaks
   ("unterminated string literal"). Search a substring without the ampersand, e.g. `DEL,RP`
   instead of `DEL,RP&ASSEM`.
 
 ## Changelog
+- **2026-07-06 (v2.5)** — Diagnosed and fixed the LAST create-only field left blank on
+  MCP-created products: `Type` / prodtype. Access Dimensions checks `Type` separately from
+  `CategoryId` and rejects order conversion with "Invalid product category" when Type is null,
+  even with VatCode + PurchaseAnalysis + CategoryId all correct (that was the NC06072602
+  break, 2026-07-06 — same failure mode as NC03072601 in v1.30.0 but with a different root
+  cause). `create_product` now defaults `Type="STOCK"` (matches every WCG Y-code) plus 8 other
+  UI-form-defaulted create-only fields (`Pack`, `AllowSplit`, `AllowLineDiscount`,
+  `AllowOverallDiscount`, `AllowSettlementDiscount`, `QuantityDecimal`, `QuantityFactor`,
+  `UnitWeightDecimals`) — cross-checked live against Y100201's shape. §4 header updated to
+  cite v1.31.0; Pitfalls entry extended with the Type/prodtype rule. `get_product_detail` and
+  `create_product`'s response now display `**Type:**` alongside Category so callers can verify
+  it's populated in one call. Legacy MCP-created products with Type=null cannot be repaired
+  via `update_product` (create-only field, same rule as VatCode / PurchaseAnalysis) — recreate
+  the product with the current tool to fix.
 - **2026-07-03 (v2.4)** — Fixed the two order-blocking gaps from v2.3 at source (v1.30.0
   code change, same-day). `create_product` now writes `vatCode` and `purchaseAnalysis` on the
   POST body — pre-v1.30.0 the `taxCode` param wrote a non-existent `TaxCode` property that

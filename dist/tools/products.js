@@ -115,6 +115,11 @@ export const createProductSchema = z.object({
         .string()
         .optional()
         .describe("DEPRECATED — legacy alias for vatCode (there is no TaxCode property on ProductItem; earlier versions of this tool wrote a non-existent field and silently failed). Kept for back-compat; pass vatCode instead. If both are supplied, vatCode wins."),
+    type: z
+        .string()
+        .optional()
+        .default("STOCK")
+        .describe("Product type / prodtype — writes ProductItem.Type. Access Dimensions validates this at order conversion time and rejects the line with 'Invalid product category' when it's null (root cause of the NC06072602 / 2026-07-06 order-conversion failure, even after v1.30.0 fixed VatCode + PurchaseAnalysis). Every UI-created stock item has Type='STOCK'; MCP-created items pre-v1.31.0 came back with Type=null because the field wasn't in the POST body. Create-only (UpdateVisibility='never'), like VatCode / PurchaseAnalysis — cannot be repaired by update_product; recreate the product if you need to change it. Default 'STOCK' matches every WCG Y-code catalogue item."),
     obsolete: z.boolean().optional().default(false).describe("Mark obsolete on creation (default false)."),
     allowDuplicate: z
         .boolean()
@@ -198,6 +203,28 @@ export async function createProduct(args) {
         ProductItemId: code,
         Description: args.description,
         CategoryId: args.categoryId, // schema defaults to "STOCK"; server requires it
+        // Type / prodtype (Edm.String, UpdateVisibility='never'). Root cause of the
+        // NC06072602 order-conversion failure — Access Dimensions rejects with
+        // "Invalid product category" when Type is null, EVEN with a good CategoryId,
+        // VatCode, and PurchaseAnalysis. UI-created stock items always have
+        // Type='STOCK'. Diff of Y100201 vs NC06072602 (2026-07-06) had this as the
+        // one remaining suspect after v1.30.0 landed. Schema defaults `type` to
+        // 'STOCK'; expose via arg so someone can pick a different value if the
+        // tenant ever configures other product types.
+        Type: args.type,
+        // The block below matches the UI's own product-form defaults, cross-checked
+        // against Y100201 (which has been through the full UI flow + Dimensions
+        // sync). All UpdateVisibility='never', so we set them here or never. Values
+        // are hardcoded rather than schema args because they're WCG conventions
+        // that nobody would want to change per-product.
+        Pack: "1",
+        AllowSplit: 1,
+        AllowLineDiscount: 1,
+        AllowOverallDiscount: 1,
+        AllowSettlementDiscount: 1,
+        QuantityDecimal: 3,
+        QuantityFactor: 1,
+        UnitWeightDecimals: 4,
         SellingPrice: toRawPrice(args.sellPrice),
         SellDecimals: PRICE_DECIMALS,
         CostPrice: toRawPrice(args.costPrice),
@@ -240,7 +267,7 @@ export async function createProduct(args) {
     // nominal — not just what we sent. Missing VatCode or PurchaseAnalysis is
     // silently order-blocking (see comment above the POST body), so surface
     // them in the response so the caller sees the round-tripped values.
-    const check = await client.get("ProductItems", `$filter=ProductItemId eq '${code}'&$select=ProductItemId,Description,DecimalSellingPrice,DecimalCostPrice,Manufacturer,ManufacturerReference,CategoryId,VatCode,PurchaseAnalysis,SalesAnalysis`);
+    const check = await client.get("ProductItems", `$filter=ProductItemId eq '${code}'&$select=ProductItemId,Description,DecimalSellingPrice,DecimalCostPrice,Manufacturer,ManufacturerReference,CategoryId,VatCode,PurchaseAnalysis,SalesAnalysis,Type`);
     const p = check.value[0] ?? created;
     const sell = typeof p.DecimalSellingPrice === "number" ? `£${p.DecimalSellingPrice.toFixed(2)}` : "N/A";
     const cost = typeof p.DecimalCostPrice === "number" ? `£${p.DecimalCostPrice.toFixed(2)}` : "N/A";
@@ -250,6 +277,9 @@ export async function createProduct(args) {
     const nominalWarn = p.VatCode == null || p.PurchaseAnalysis == null
         ? `\n\n⚠️ ${p.VatCode == null ? "VatCode" : ""}${p.VatCode == null && p.PurchaseAnalysis == null ? " and " : ""}${p.PurchaseAnalysis == null ? "PurchaseAnalysis" : ""} came back null. Quote lines added with this SKU will ${p.VatCode == null ? "price at Gross=Net (no VAT applied)" : ""}${p.VatCode == null && p.PurchaseAnalysis == null ? ", and " : ""}${p.PurchaseAnalysis == null ? "Access Dimensions will reject order conversion with 'Invalid product category'" : ""}. Both fields are create-only on this entity — you'll need to set them in the Prospect UI (update_product cannot). Re-run with vatCode / purchaseAnalysis populated to fix at source.`
         : "";
+    const typeWarn = p.Type == null
+        ? `\n\n⚠️ Type came back null. Access Dimensions will reject order conversion with 'Invalid product category' regardless of VatCode / PurchaseAnalysis (that was the NC06072602 breakage — root cause diagnosed 2026-07-06). Create-only field — cannot be repaired via update_product; recreate the product with type='STOCK' set to fix.`
+        : "";
     return [
         `Product created successfully!`,
         `**Code:** ${p.ProductItemId}`,
@@ -258,11 +288,12 @@ export async function createProduct(args) {
         `**VAT code:** ${p.VatCode ?? "(null — order will not price with VAT)"}`,
         `**Purchase Nominal:** ${p.PurchaseAnalysis ?? "(null — Dimensions will reject order)"}`,
         `**Sales Nominal:** ${p.SalesAnalysis ?? "N/A"}`,
+        `**Category:** ${p.CategoryId ?? "N/A"} | **Type:** ${p.Type ?? "(null — Dimensions will reject order)"}`,
         `**Supplier:** ${p.Manufacturer ?? "N/A"} | **Mfr Ref:** ${p.ManufacturerReference ?? "N/A"}`,
-        `**Category:** ${p.CategoryId ?? "N/A"}`,
         `**CRM Link:** ${toCrmLink(created.RecordLink)}`,
         priceWarn,
         nominalWarn,
+        typeWarn,
     ]
         .filter(Boolean)
         .join("\n");

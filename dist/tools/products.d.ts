@@ -50,9 +50,11 @@ export declare const createProductSchema: z.ZodObject<{
     vatCode: z.ZodOptional<z.ZodString>;
     purchaseAnalysis: z.ZodOptional<z.ZodString>;
     taxCode: z.ZodOptional<z.ZodString>;
+    type: z.ZodDefault<z.ZodOptional<z.ZodString>>;
     obsolete: z.ZodDefault<z.ZodOptional<z.ZodBoolean>>;
     allowDuplicate: z.ZodDefault<z.ZodOptional<z.ZodBoolean>>;
 }, "strip", z.ZodTypeAny, {
+    type: string;
     description: string;
     costPrice: number;
     categoryId: string;
@@ -78,6 +80,7 @@ export declare const createProductSchema: z.ZodObject<{
     description: string;
     costPrice: number;
     sellPrice: number;
+    type?: string | undefined;
     productItemId?: string | undefined;
     taxCode?: string | undefined;
     extendedDescription?: string | undefined;
