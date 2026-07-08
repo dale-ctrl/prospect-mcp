@@ -6,6 +6,37 @@ The format is based on Keep a Changelog, and this project adheres to Semantic Ve
 
 ## [Unreleased]
 
+## [1.33.0] - 2026-07-08
+### Fixed — `create_product` defensive Obsolete guard + versa-maintenance skill polish
+
+Two pieces of work in one release.
+
+#### A. `create_product` — Obsolete=true after create, ROOT-CAUSED and guarded
+
+Six AR-created NC codes (NC07072601–NC07072606) came back Obsolete=1 on quote 16108 (Wey Valley Academy / opp 16096). Systematic probe on 2026-07-08 identified the culprit:
+
+- **Root cause: server-side automation running as user `DBA`** flips Obsolete=1 on newly-created products roughly **55–57 minutes** after creation. Not intermittent — the two Wey Valley batches on 2026-07-07 (13:41 and 16:11) hit every AR-created NC that day, gap consistently 55.5–57.5 minutes. Confirmed via `LastUpdatedByUserId="DBA"` on all six affected products.
+- **NOT triggered by our POST body.** Create path is clean at t+0s / t+3s / t+10s / t+30s across four shape variants including the exact `"Quoted by Neil 07/07/26"` reference. Our POST already sends `Obsolete: 0` and the server accepts it.
+- **Likely origin**: Access Dimensions sync job or a Prospect scheduled task that classifies not-yet-synced products as obsolete. Root cause external to this MCP — permanent fix needs a **tenant-side investigation to identify and disable the DBA cron**.
+
+Defensive changes shipped in `create_product` anyway (per Dale's brief — "regardless of root cause"):
+
+1. Read-back `$select` extended with `Obsolete`.
+2. Post-create verify: if the immediate GET comes back Obsolete=1, auto-PATCH to 0 and re-verify. If still 1 after the retry, surface `⚠️ Obsolete could not be cleared — check manually`. If cleared, surface an `ℹ️` note pointing at the DBA-batch pitfall for context.
+3. Response text now surfaces `**Obsolete:** yes/no` on its own line — the state is always visible without a follow-up `get_product_detail` call.
+
+Skill: `prospect-crm-create-product` → v2.7. Old "seen once, no known automation" pitfall entry rewritten with the accurate DBA-batch diagnosis + operational workaround (`get_product_detail` immediately before order conversion; `update_product(obsolete=false)` to reactivate — the window between reactivation and the next DBA fire is long enough for one order pass).
+
+Live smoke test: 4 shape-varied throwaways (minimal, Aaron Desking + Neil-reference-with-date-substring, allowDuplicate variant, repeat) all came back `**Obsolete:** no`, guard didn't spuriously fire, server-side state matches. Test products obsoleted.
+
+#### B. `versa-maintenance-contracts-bulk` skill polish (Treleigh Community Primary retrospective)
+
+Nine exact-string edits from Dale's 2026-07-08 brief:
+
+- **Step 0** now mounts `~/Downloads` directly via `request_cowork_directory({ path: "~/Downloads" })` instead of opening the folder picker — WCG always works Versa Maintenance Contracts out of Downloads, where the existing archive lives. `~/Downloads` expands per-user so still no hardcoded usernames.
+- **Business rules → Equipment string format** now always spells out **"Wall Pocket"** in full (never just "Pocket") and spaces the `x` on both sides. Examples: `"1 x Double Wall Pocket"`, `"2 x Double Wall Pockets"`, `"9 x Mobile Tables"`. Applied consistently to the bullet, the Step 2 example call, the Step 3 prose, the Step 3 rendered-XML example, the Step 3 code comment, and the conflict-check dialogue.
+- Skill changelog: top entry dated 2026-07-08 references v1.33.0 and summarises both tightenings.
+
 ## [1.32.0] - 2026-07-06
 ### Changed — `create_product` now defaults `vatCode` + `purchaseAnalysis`
 

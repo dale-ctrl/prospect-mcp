@@ -498,11 +498,37 @@ fields the tenant configures under "Custom Fields" on a ProductItem. Counterpart
   current tool (these fields are create-only — cannot be patched), obsolete the old code, and swap
   its quote line. As of v1.31.0/v1.32.0 the tool sets Type/VatCode/PurchaseAnalysis by default, so
   new NC codes convert out of the box — but always still pass a valid `salesAnalysis`.
-- **New NC product shows Obsolete after creation** — verify `Obsolete=no` (via
-  `get_product_detail`) before converting. Seen once (2026-07-06) with no enabled automation
-  behind it; reactivate via `update_product(productItemId=..., obsolete=false)` and re-check.
+- **New NC product shows Obsolete after creation — root-caused v1.33.0.** A tenant-side
+  automation running as user **`DBA`** flips `Obsolete=1` on newly-created products roughly
+  55–57 minutes after they're posted. Confirmed 2026-07-08 via field-by-field probe: six
+  AR-created NC codes (NC07072601–NC07072606) were all flipped in two batches (13:41 and 16:11
+  on 2026-07-07), gap between create and flip consistently 55.5–57.5 minutes — a scheduled
+  cron. **NOT triggered by our POST body** — the create path itself is clean (verified
+  `Obsolete=0` at t+0s, t+3s, t+10s, and t+30s across four shape variants). The v1.33.0
+  `create_product` handler adds a defensive verify-and-auto-clear guard for any faster race,
+  but the DBA batch fires an hour later, out of the tool's inline window. Root cause external
+  to this MCP — likely an Access Dimensions sync job or a Prospect scheduled task that flags
+  "not yet synced" products as obsolete. **Operational workaround**: `get_product_detail`
+  right before converting to an order; if `Obsolete=yes`, run
+  `update_product(productItemId=..., obsolete=false)` and convert immediately (the DBA batch
+  may re-flip it, but the window is long enough for one order pass). **Permanent fix** needs a
+  tenant-side investigation to identify and disable the DBA automation.
 
 ## Changelog
+- **2026-07-08 (v2.7)** — Diagnosed the "New NC product shows Obsolete after creation" pitfall
+  and shipped a defensive guard. Root cause: **a tenant-side automation running as user `DBA`**
+  flips `Obsolete=1` on newly-created AR products ~55–57 minutes after they're posted (six
+  products flipped in two batches on 2026-07-07: NC07072601–02 at 13:41 and NC07072603–06 at
+  16:11 — consistent gap). Confirmed 2026-07-08 that the create path itself is clean —
+  Obsolete=0 stays at t+0s, t+3s, t+10s, t+30s across four shape variants including the exact
+  `"Quoted by Neil 07/07/26"` reference from Wey Valley Academy (opp 16096 / quote 16108).
+  v1.33.0 `create_product` now: (a) surfaces `**Obsolete:**` on the response line so the state
+  is always visible; (b) if the immediate post-create read comes back Obsolete=1, auto-PATCHes
+  to Obsolete=0 and re-verifies, with a warning line if it can't be cleared. Pitfall rewritten
+  from "seen once, no known automation" to the accurate DBA-batch diagnosis + operational
+  workaround (get_product_detail immediately before order conversion, update_product to
+  reactivate if needed). Permanent fix needs a tenant-side investigation to identify and
+  disable the DBA cron.
 - **2026-07-06 (v2.6)** — Access Dimensions order-conversion field requirements folded into the
   defaults. `create_product` now defaults `vatCode="1"` AND `purchaseAnalysis="10-1-2006-000"`
   (v1.32.0) so a caller who omits both still gets a Dimensions-convertible product; `type` was

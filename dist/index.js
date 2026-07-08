@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// prospect-crm-mcp v1.32.0 — bundled by esbuild on 2026-07-06T09:13:24.131Z
+// prospect-crm-mcp v1.33.0 — bundled by esbuild on 2026-07-08T11:05:18.392Z
 // Single-file MCP server; no node_modules required at runtime.
 var __create = Object.create;
 var __defProp = Object.defineProperty;
@@ -24909,11 +24909,34 @@ async function createProduct(args) {
   const created = await client.post("ProductItems", body);
   const check2 = await client.get(
     "ProductItems",
-    `$filter=ProductItemId eq '${code}'&$select=ProductItemId,Description,DecimalSellingPrice,DecimalCostPrice,Manufacturer,ManufacturerReference,CategoryId,VatCode,PurchaseAnalysis,SalesAnalysis,Type`
+    `$filter=ProductItemId eq '${code}'&$select=ProductItemId,Description,DecimalSellingPrice,DecimalCostPrice,Manufacturer,ManufacturerReference,CategoryId,VatCode,PurchaseAnalysis,SalesAnalysis,Type,Obsolete`
   );
   const p = check2.value[0] ?? created;
   const sell = typeof p.DecimalSellingPrice === "number" ? `\xA3${p.DecimalSellingPrice.toFixed(2)}` : "N/A";
   const cost = typeof p.DecimalCostPrice === "number" ? `\xA3${p.DecimalCostPrice.toFixed(2)}` : "N/A";
+  let obsoleteWarn = "";
+  const looksObsolete = (v) => v === 1 || v === true;
+  if (looksObsolete(p.Obsolete)) {
+    try {
+      const keyExpr = `OperatingCompanyCode='${OPERATING_COMPANY_CODE3}',ProductItemId='${code.replace(/'/g, "''")}'`;
+      await client.patch("ProductItems", keyExpr, { Obsolete: 0 });
+      const reVerify = await client.get(
+        "ProductItems",
+        `$filter=ProductItemId eq '${code}'&$select=ProductItemId,Obsolete`
+      );
+      const stillObsolete = looksObsolete(reVerify.value[0]?.Obsolete);
+      if (stillObsolete) {
+        obsoleteWarn = "\n\n\u26A0\uFE0F Product created but Obsolete could not be cleared (still Obsolete=1 after auto-PATCH). Check manually \u2014 a tenant automation may be re-flipping it (see the create-product skill's pitfall).";
+      } else {
+        obsoleteWarn = "\n\n\u2139\uFE0F Product came back Obsolete=1 immediately after create; auto-cleared to Obsolete=0 (v1.33.0 defensive guard). Root-cause remains a server-side automation running as user 'DBA' \u2014 see skill pitfall.";
+        p.Obsolete = 0;
+      }
+    } catch (err) {
+      obsoleteWarn = `
+
+\u26A0\uFE0F Product created but Obsolete auto-clear failed: ${(err.message || String(err)).split("\n")[0]}. Check manually.`;
+    }
+  }
   const priceWarn = sell === "\xA30.00" || cost === "\xA30.00" ? "\n\n\u26A0\uFE0F Sell or cost persisted as \xA30.00. SellingPrice / SellDecimals (raw integer fields) were sent but the server did not honour them \u2014 check the live row and the PRICE quirk note at the top of products.ts." : "";
   const nominalWarn = p.VatCode == null || p.PurchaseAnalysis == null ? `
 
@@ -24921,6 +24944,7 @@ async function createProduct(args) {
   const typeWarn = p.Type == null ? `
 
 \u26A0\uFE0F Type came back null. Access Dimensions will reject order conversion with 'Invalid product category' regardless of VatCode / PurchaseAnalysis (that was the NC06072602 breakage \u2014 root cause diagnosed 2026-07-06). Create-only field \u2014 cannot be repaired via update_product; recreate the product with type='STOCK' set to fix.` : "";
+  const obsoleteDisplay = looksObsolete(p.Obsolete) ? "yes" : "no";
   return [
     `Product created successfully!`,
     `**Code:** ${p.ProductItemId}`,
@@ -24930,10 +24954,12 @@ async function createProduct(args) {
     `**Purchase Nominal:** ${p.PurchaseAnalysis ?? "(null \u2014 Dimensions will reject order)"}`,
     `**Sales Nominal:** ${p.SalesAnalysis ?? "N/A"}`,
     `**Category:** ${p.CategoryId ?? "N/A"} | **Type:** ${p.Type ?? "(null \u2014 Dimensions will reject order)"}`,
+    `**Obsolete:** ${obsoleteDisplay}`,
     `**Supplier:** ${p.Manufacturer ?? "N/A"} | **Mfr Ref:** ${p.ManufacturerReference ?? "N/A"}`,
     `**CRM Link:** ${toCrmLink(created.RecordLink)}`,
     priceWarn,
     nominalWarn,
+    obsoleteWarn,
     typeWarn
   ].filter(Boolean).join("\n");
 }

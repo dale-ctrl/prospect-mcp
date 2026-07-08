@@ -101,21 +101,26 @@ both fields populated, 20+ existing merged contracts on file.
 
 ## Business rules
 
-- **Equipment string format.** Default to generic descriptors:
-  `"Nx Mobile Tables"`, `"Nx Single Pockets"`, `"Nx Double Pockets"`,
-  `"Nx Triple Pockets"`, `"Nx Quad Pockets"`. If the user specifies a
-  brand (Benchmark, Spaceright, or Sico), include it in the string,
-  e.g. `"Nx Versa Benchmark Tables"`. Pricing is the same for any
-  Mobile Table brand. For mixed equipment on one site, put each
-  quantity/description on its **own line** (newline-separated, NOT
+- **Equipment string format.** Always spell out **"Wall Pocket"** in
+  full when the item is a wall pocket — never abbreviate to just
+  "Pocket". Space the `x` on both sides, and pluralise "Pocket"/"Table"
+  only when the quantity isn't 1: `"1 x Double Wall Pocket"`,
+  `"2 x Double Wall Pockets"`, `"1 x Mobile Table"`,
+  `"9 x Mobile Tables"`. Default descriptors: `"N x Mobile Table(s)"`,
+  `"N x Single Wall Pocket(s)"`, `"N x Double Wall Pocket(s)"`,
+  `"N x Triple Wall Pocket(s)"`, `"N x Quad Wall Pocket(s)"`. If the
+  user specifies a brand (Benchmark, Spaceright, or Sico), include it
+  in the string, e.g. `"9 x Versa Benchmark Tables"`. Pricing is the
+  same for any Mobile Table brand. For mixed equipment on one site, put
+  each quantity/description on its **own line** (newline-separated, NOT
   comma-separated):
 
   ```
-  5x Mobile Tables
-  2x Single Pockets
+  5 x Mobile Tables
+  2 x Single Wall Pockets
   ```
 
-  i.e. join items with `\n` — `"5x Mobile Tables\n2x Single Pockets"`.
+  i.e. join items with `\n` — `"5 x Mobile Tables\n2 x Single Wall Pockets"`.
   This lands as separate lines in the CRM Versa field AND as separate
   lines inside the contract's equipment cell (see Step 2 + Step 3 for
   the wire formats).
@@ -132,7 +137,7 @@ both fields populated, 20+ existing merged contracts on file.
 
 ## Workflow
 
-### 0. Mount a user-owned output folder (FIRST STEP, every run)
+### 0. Mount the Downloads folder (FIRST STEP, every run)
 
 Files written from the sandbox into the cowork session outputs path
 (`local_*/outputs`) inherit Linux-side ownership only. Adobe Acrobat
@@ -141,15 +146,14 @@ Access denied." Edge silently fails to render them. The same happens
 with any other Windows app strict about file ACLs.
 
 Fix: at the very start of every run, call
-`mcp__cowork__request_cowork_directory` so the user picks a folder on
-their own machine. Files written into a connected user-owned folder
-inherit proper Windows ACLs and open cleanly in Acrobat.
-
-Do NOT hardcode any path that contains a username (no
-`C:\Users\<name>\...`). The skill must work for any user without edits.
-Suggest the user pick a portable, easily-locatable folder (their
-Desktop, Documents, or a dedicated `versa-contracts` folder) but let
-them choose.
+`mcp__cowork__request_cowork_directory({ path: "~/Downloads" })`
+directly — do NOT open the folder picker for this skill. WCG always
+runs Versa Maintenance Contracts out of the user's Downloads folder;
+that's where the existing `Versa Maintenance Contracts` archive and
+all prior per-school contracts already live, and passing the path
+directly skips a picker prompt the user doesn't want for this
+workflow. `~/Downloads` expands per-user, so this still contains no
+hardcoded username and works for any user without edits.
 
 After the folder is connected, use the mount path returned by
 `request_cowork_directory` as the project root, and create
@@ -253,11 +257,11 @@ figures, surface the conflict to the user:
 
 ```
 Division 5380 (Westcountry Interiors Ltd) already has:
-  Equipment: 9x Mobile Tables
+  Equipment: 9 x Mobile Tables
   Total:     378.00
 
 About to overwrite with:
-  Equipment: 14x Mobile Tables
+  Equipment: 14 x Mobile Tables
   Total:     588.00
 
 Proceed? (yes / keep existing / cancel)
@@ -274,7 +278,7 @@ Then call:
 ```
 update_division_versa_maintenance({
   divisionId: <id>,
-  equipmentMaintained: "5x Mobile Tables\n2x Single Pockets",   # newline-joined multi-line string
+  equipmentMaintained: "5 x Mobile Tables\n2 x Single Wall Pockets",   # newline-joined multi-line string
   totalMaintenanceValue: "X.00"                                  # STRING, 2dp, no currency symbol
 })
 ```
@@ -283,7 +287,7 @@ update_division_versa_maintenance({
 (items separated by `\n`, not commas) so each quantity/description lands
 on its own line in `DivisionXtra.StandardTextField5`. The CRM textarea
 preserves the `\n`s as visible line breaks. For a single-item contract,
-pass a single line with no trailing newline, e.g. `"9x Mobile Tables"`.
+pass a single line with no trailing newline, e.g. `"9 x Mobile Tables"`.
 
 ### 3. Produce the merged docx (client-side)
 
@@ -395,7 +399,7 @@ def build_replacements(detected, target):
 **Equipment cell — inject `<w:br/>` for each line, NOT a bare `\n`.**
 The equipment value lands in `table[0]` cell `[4,1]` — a single Word
 table cell. The target string from Step 2 is multi-line
-(`"5x Mobile Tables\n2x Single Pockets"`), but **a bare `\n` inside an
+(`"5 x Mobile Tables\n2 x Single Wall Pockets"`), but **a bare `\n` inside an
 XML `<w:t>` text node will NOT produce a visible line break in the
 rendered docx** — to Word it's just whitespace. The cell will collapse
 both items onto one line with a space between them.
@@ -408,7 +412,7 @@ string is fed into `xml.replace(old, new, 1)`. The final inserted run
 ends up looking like:
 
 ```
-<w:t>5x Mobile Tables</w:t><w:br/><w:t>2x Single Pockets</w:t>
+<w:t>5 x Mobile Tables</w:t><w:br/><w:t>2 x Single Wall Pockets</w:t>
 ```
 
 which Word renders as two lines inside the same paragraph (and the same
@@ -433,7 +437,7 @@ copy is already gone:
 detected = detect_source_values('/tmp/versa_template.docx')
 target = {
     'client_name':   new_client_name,
-    'equipment':     new_equipment,             # e.g. "9x Mobile Tables"
+    'equipment':     new_equipment,             # e.g. "9 x Mobile Tables"
     'tel_no':        new_tel_no,
     'address_lines': new_address_lines,         # list of 4 or 5 strings
     'total_value':   new_total_value,           # float, e.g. 378.00
@@ -726,6 +730,16 @@ callers cannot directly email customers. Workflow is always:
 
 ## Changelog
 
+- 2026-07-08 (v1.33.0): Two tightenings from a Treleigh Community
+  Primary School run. (a) Step 0 now mounts `~/Downloads` directly via
+  `request_cowork_directory({ path: "~/Downloads" })` instead of opening
+  the folder picker — WCG always works Versa Maintenance Contracts out
+  of Downloads, where the existing contract archive lives. (b) Equipment
+  string format now always spells out "Wall Pocket" in full (never just
+  "Pocket") and spaces the `x` on both sides — `"1 x Double Wall
+  Pocket"`, `"2 x Double Wall Pockets"`, `"9 x Mobile Tables"` — updated
+  in the Business rules bullet plus the matching Step 2/Step 3 code
+  examples and comments for consistency.
 - 2026-06-26: Equipment formatting switched from comma-separated to
   one-line-per-item. Two layers, must be kept in sync:
   (a) **CRM side** — `equipmentMaintained` passed to
