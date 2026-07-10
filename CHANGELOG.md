@@ -6,6 +6,37 @@ The format is based on Keep a Changelog, and this project adheres to Semantic Ve
 
 ## [Unreleased]
 
+## [1.34.0] - 2026-07-10
+### Fixed — `create_product` sets `CatalogueCode="USER"` — DBA cron no longer flips new NCs to Obsolete
+
+Two-day follow-up to v1.33.0. That release identified user `DBA` as the party flipping newly-created NC products to `Obsolete=1` ~55–57 minutes after creation, but couldn't identify which field controlled the DBA batch's selection criterion — it recommended a tenant-side investigation to disable the cron. Dale's follow-up found the discriminator.
+
+#### Discriminator identified: `ProductItem.CatalogueCode`
+The DBA cron classifies products with `CatalogueCode="SYSTEM"` (the server's default when the field is omitted from POST) as obsolete when it can't find them in its reference catalogue — that's what flipped NC07072601–NC07072606 within an hour of creation. Products with `CatalogueCode="USER"` are exempt from the batch entirely.
+
+#### Empirical proof (2026-07-10)
+Queried every `CatalogueCode="USER"` product in the tenant: 14 samples across a 7-day window, every one still `Obsolete=0` with `LastUpdatedByUserId` = the human creator (never `DBA`). Some are 6+ days old and still untouched. UI-created NCs (`NCAR*`, `NCEK*`, `NCGES*` prefixes) all come out as `USER` because the product-form sets it — pre-v1.34.0 the MCP POST was letting the server default `SYSTEM` kick in.
+
+#### Fix
+New `catalogueCode` schema arg on `createProductSchema`, defaulting to `"USER"`. Written into every POST body. Same handling pattern as `type` (v1.31.0) — schema-side `.default()`, hardcoded to WCG's convention, exposed as an override for edge cases. The field is create-only (`UpdateVisibility="never"`), varchar(6), `HasDefaultValue="true"`.
+
+#### Read-back surfacing + defensive warning
+- Read-back `$select` extended with `CatalogueCode`.
+- Response text now shows `**CatalogueCode:**` alongside Category and Type.
+- New warning line fires if `CatalogueCode` comes back as anything other than `"USER"` (e.g. an explicit override to `"SYSTEM"`, or the field silently rejected) — names the exact downstream failure (DBA cron will flip Obsolete=1 within ~1h) so a caller who overrides sees the consequences.
+- `get_product_detail` extended the same way, with the same inline warning suffix.
+
+#### Live smoke test (throwaways NC10072601 + NC10072602, both obsoleted after)
+- `create_product` with no `catalogueCode` → schema default `"USER"` lands correctly. All other v1.30.0–v1.33.0 defaults still round-trip: Type, VatCode, PurchaseAnalysis, SalesAnalysis, CategoryId, Obsolete=0.
+- Explicit override probe `catalogueCode="SYSTEM"` → lands as `"SYSTEM"`, warning line fires with the DBA-cron consequence spelled out.
+
+#### Legacy blanks
+`CatalogueCode` is create-only, so NC07072601–06 and any other pre-v1.34.0 `SYSTEM`-catalogued products cannot be repaired via `update_product`. Options: (a) recreate via the fixed tool (they'll come out `USER`-catalogued and stay Obsolete=0), then obsolete the old codes and swap any quote lines pointing at them.
+
+#### Skill + version tracking
+- `skills/prospect-crm-create-product/SKILL.md` → v2.8. Pitfall entry rewritten from "operational workaround" to "RESOLVED v1.34.0" with the CatalogueCode explanation. The "permanent fix needs a tenant-side DBA-cron disable" recommendation is dropped — no longer needed.
+- The v1.33.0 defensive verify-and-auto-clear guard for `Obsolete` stays in place as belt-and-braces.
+
 ## [1.33.0] - 2026-07-08
 ### Fixed — `create_product` defensive Obsolete guard + versa-maintenance skill polish
 

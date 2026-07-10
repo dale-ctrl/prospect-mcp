@@ -498,23 +498,35 @@ fields the tenant configures under "Custom Fields" on a ProductItem. Counterpart
   current tool (these fields are create-only — cannot be patched), obsolete the old code, and swap
   its quote line. As of v1.31.0/v1.32.0 the tool sets Type/VatCode/PurchaseAnalysis by default, so
   new NC codes convert out of the box — but always still pass a valid `salesAnalysis`.
-- **New NC product shows Obsolete after creation — root-caused v1.33.0.** A tenant-side
-  automation running as user **`DBA`** flips `Obsolete=1` on newly-created products roughly
-  55–57 minutes after they're posted. Confirmed 2026-07-08 via field-by-field probe: six
-  AR-created NC codes (NC07072601–NC07072606) were all flipped in two batches (13:41 and 16:11
-  on 2026-07-07), gap between create and flip consistently 55.5–57.5 minutes — a scheduled
-  cron. **NOT triggered by our POST body** — the create path itself is clean (verified
-  `Obsolete=0` at t+0s, t+3s, t+10s, and t+30s across four shape variants). The v1.33.0
-  `create_product` handler adds a defensive verify-and-auto-clear guard for any faster race,
-  but the DBA batch fires an hour later, out of the tool's inline window. Root cause external
-  to this MCP — likely an Access Dimensions sync job or a Prospect scheduled task that flags
-  "not yet synced" products as obsolete. **Operational workaround**: `get_product_detail`
-  right before converting to an order; if `Obsolete=yes`, run
-  `update_product(productItemId=..., obsolete=false)` and convert immediately (the DBA batch
-  may re-flip it, but the window is long enough for one order pass). **Permanent fix** needs a
-  tenant-side investigation to identify and disable the DBA automation.
+- **New NC product shows Obsolete after creation — RESOLVED v1.34.0.** The DBA-cron
+  Obsolete-flip is fully understood and disarmed at source. A server-side batch job running as
+  user `DBA` classifies products with `CatalogueCode="SYSTEM"` (the server's default when
+  omitted from POST) as obsolete when it can't find them in its reference catalogue — that's
+  what flipped NC07072601–06 within ~55min of creation. Products with `CatalogueCode="USER"`
+  are exempt from the batch entirely (empirical confirmation across a 7-day, 14-product
+  sample: every `USER`-catalogued product stays `Obsolete=0` and `LastUpdatedByUserId` remains
+  the human creator, never `DBA`). UI-created NCs come out as `USER` because the product-form
+  sets it; pre-v1.34.0 the MCP POST let the server default kick in. From v1.34.0 the schema
+  defaults `catalogueCode="USER"` and the field is written into every POST body. Historical
+  `CatalogueCode="SYSTEM"` products cannot be repaired — the field is create-only
+  (`UpdateVisibility="never"`); they need to be recreated with the current tool. The v1.33.0
+  defensive verify-and-auto-clear guard stays in place as belt-and-braces + emits a new
+  warning line if a caller ever explicitly overrides `catalogueCode` back to `"SYSTEM"`.
 
 ## Changelog
+- **2026-07-10 (v2.8)** — DBA-cron Obsolete-flip **fully resolved at source**. Two-day
+  follow-up to v2.7's diagnosis: the discriminator is `ProductItem.CatalogueCode`. Products
+  with `CatalogueCode="SYSTEM"` (the server default when omitted from POST) get flipped
+  Obsolete=1 by the DBA batch when it can't find them in its reference catalogue — that's what
+  hit NC07072601–06. Products with `CatalogueCode="USER"` are exempt (14-product 7-day sample:
+  every one still `Obsolete=0`, `LastUpdatedByUserId` still the human creator). UI-created NCs
+  come out as `USER` because the product-form sets it; pre-v1.34.0 the MCP POST was letting
+  the server default kick in. `create_product` v1.34.0 adds a `catalogueCode` schema arg
+  defaulting to `"USER"` and writes it on every POST. The field is create-only
+  (`UpdateVisibility="never"`) so legacy `SYSTEM` products can't be repaired — they need
+  recreating. New warning line fires if the field comes back as anything other than `USER`.
+  Pitfall entry rewritten from "operational workaround" to "RESOLVED v1.34.0"; permanent fix
+  no longer needs a tenant-side DBA-cron disable.
 - **2026-07-08 (v2.7)** — Diagnosed the "New NC product shows Obsolete after creation" pitfall
   and shipped a defensive guard. Root cause: **a tenant-side automation running as user `DBA`**
   flips `Obsolete=1` on newly-created AR products ~55–57 minutes after they're posted (six

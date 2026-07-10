@@ -51,6 +51,7 @@ export declare const createProductSchema: z.ZodObject<{
     purchaseAnalysis: z.ZodOptional<z.ZodString>;
     taxCode: z.ZodOptional<z.ZodString>;
     type: z.ZodDefault<z.ZodOptional<z.ZodString>>;
+    catalogueCode: z.ZodDefault<z.ZodOptional<z.ZodString>>;
     obsolete: z.ZodDefault<z.ZodOptional<z.ZodBoolean>>;
     allowDuplicate: z.ZodDefault<z.ZodOptional<z.ZodBoolean>>;
 }, "strip", z.ZodTypeAny, {
@@ -61,6 +62,7 @@ export declare const createProductSchema: z.ZodObject<{
     autoCode: boolean;
     sellPrice: number;
     unitDescription: string;
+    catalogueCode: string;
     obsolete: boolean;
     allowDuplicate: boolean;
     productItemId?: string | undefined;
@@ -97,6 +99,7 @@ export declare const createProductSchema: z.ZodObject<{
     barcode?: string | undefined;
     vatCode?: string | undefined;
     purchaseAnalysis?: string | undefined;
+    catalogueCode?: string | undefined;
     obsolete?: boolean | undefined;
     allowDuplicate?: boolean | undefined;
 }>;

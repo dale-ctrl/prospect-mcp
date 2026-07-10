@@ -120,6 +120,11 @@ export const createProductSchema = z.object({
         .optional()
         .default("STOCK")
         .describe("Product type / prodtype — writes ProductItem.Type. Access Dimensions validates this at order conversion time and rejects the line with 'Invalid product category' when it's null (root cause of the NC06072602 / 2026-07-06 order-conversion failure, even after v1.30.0 fixed VatCode + PurchaseAnalysis). Every UI-created stock item has Type='STOCK'; MCP-created items pre-v1.31.0 came back with Type=null because the field wasn't in the POST body. Create-only (UpdateVisibility='never'), like VatCode / PurchaseAnalysis — cannot be repaired by update_product; recreate the product if you need to change it. Default 'STOCK' matches every WCG Y-code catalogue item."),
+    catalogueCode: z
+        .string()
+        .optional()
+        .default("USER")
+        .describe("ProductItem.CatalogueCode — determines whether a server-side DBA batch job leaves the product alone or classifies it as obsolete. UI-created NC items get CatalogueCode='USER' from the form; when omitted, the server default is 'SYSTEM', which the DBA cron then flips to Obsolete=1 ~55–57 minutes later (root cause of the NC07072601–06 Wey Valley Academy break diagnosed on 2026-07-08). Every existing product with CatalogueCode='USER' escapes the flip. Defaults to 'USER' from v1.34.0 so MCP-created products are automatically DBA-exempt. Create-only (UpdateVisibility='never') like the other WCG defaults — cannot be repaired via update_product."),
     obsolete: z.boolean().optional().default(false).describe("Mark obsolete on creation (default false)."),
     allowDuplicate: z
         .boolean()
@@ -212,6 +217,17 @@ export async function createProduct(args) {
         // 'STOCK'; expose via arg so someone can pick a different value if the
         // tenant ever configures other product types.
         Type: args.type,
+        // CatalogueCode (Edm.String varchar(6), UpdateVisibility='never',
+        // HasDefaultValue='true'). Root cause of the NC07072601-06 "flipped
+        // Obsolete=1 by DBA ~55min after create" bug diagnosed 2026-07-08. The
+        // server default when omitted is 'SYSTEM'; a scheduled server-side batch
+        // job running as user 'DBA' then classifies SYSTEM-catalogued items whose
+        // Dimensions counterpart it can't find and flips them Obsolete=1.
+        // Every product in the tenant with CatalogueCode='USER' escapes the flip
+        // (verified across a 7-day sample). UI-created NCs come out as 'USER'
+        // because the product-create form sets it; the MCP POST was letting the
+        // server default kick in. Schema defaults `catalogueCode` to 'USER'.
+        CatalogueCode: args.catalogueCode,
         // The block below matches the UI's own product-form defaults, cross-checked
         // against Y100201 (which has been through the full UI flow + Dimensions
         // sync). All UpdateVisibility='never', so we set them here or never. Values
@@ -273,7 +289,7 @@ export async function createProduct(args) {
     // nominal — not just what we sent. Missing VatCode or PurchaseAnalysis is
     // silently order-blocking (see comment above the POST body), so surface
     // them in the response so the caller sees the round-tripped values.
-    const check = await client.get("ProductItems", `$filter=ProductItemId eq '${code}'&$select=ProductItemId,Description,DecimalSellingPrice,DecimalCostPrice,Manufacturer,ManufacturerReference,CategoryId,VatCode,PurchaseAnalysis,SalesAnalysis,Type,Obsolete`);
+    const check = await client.get("ProductItems", `$filter=ProductItemId eq '${code}'&$select=ProductItemId,Description,DecimalSellingPrice,DecimalCostPrice,Manufacturer,ManufacturerReference,CategoryId,VatCode,PurchaseAnalysis,SalesAnalysis,Type,Obsolete,CatalogueCode`);
     const p = check.value[0] ?? created;
     const sell = typeof p.DecimalSellingPrice === "number" ? `£${p.DecimalSellingPrice.toFixed(2)}` : "N/A";
     const cost = typeof p.DecimalCostPrice === "number" ? `£${p.DecimalCostPrice.toFixed(2)}` : "N/A";
@@ -319,6 +335,9 @@ export async function createProduct(args) {
     const typeWarn = p.Type == null
         ? `\n\n⚠️ Type came back null. Access Dimensions will reject order conversion with 'Invalid product category' regardless of VatCode / PurchaseAnalysis (that was the NC06072602 breakage — root cause diagnosed 2026-07-06). Create-only field — cannot be repaired via update_product; recreate the product with type='STOCK' set to fix.`
         : "";
+    const catalogueCodeWarn = p.CatalogueCode !== "USER"
+        ? `\n\n⚠️ CatalogueCode came back as ${p.CatalogueCode == null ? "null" : `'${p.CatalogueCode}'`}, NOT 'USER'. The server-side DBA cron will flip this product to Obsolete=1 within ~1 hour (NC07072601-06 broke this way — root cause diagnosed 2026-07-08). Create-only field — cannot be repaired via update_product. Recreate with catalogueCode='USER' (the current default from v1.34.0) set to fix.`
+        : "";
     const obsoleteDisplay = looksObsolete(p.Obsolete) ? "yes" : "no";
     return [
         `Product created successfully!`,
@@ -328,14 +347,15 @@ export async function createProduct(args) {
         `**VAT code:** ${p.VatCode ?? "(null — order will not price with VAT)"}`,
         `**Purchase Nominal:** ${p.PurchaseAnalysis ?? "(null — Dimensions will reject order)"}`,
         `**Sales Nominal:** ${p.SalesAnalysis ?? "N/A"}`,
-        `**Category:** ${p.CategoryId ?? "N/A"} | **Type:** ${p.Type ?? "(null — Dimensions will reject order)"}`,
+        `**Category:** ${p.CategoryId ?? "N/A"} | **Type:** ${p.Type ?? "(null — Dimensions will reject order)"} | **CatalogueCode:** ${p.CatalogueCode ?? "N/A"}`,
         `**Obsolete:** ${obsoleteDisplay}`,
         `**Supplier:** ${p.Manufacturer ?? "N/A"} | **Mfr Ref:** ${p.ManufacturerReference ?? "N/A"}`,
         `**CRM Link:** ${toCrmLink(created.RecordLink)}`,
         priceWarn,
         nominalWarn,
-        obsoleteWarn,
         typeWarn,
+        catalogueCodeWarn,
+        obsoleteWarn,
     ]
         .filter(Boolean)
         .join("\n");
