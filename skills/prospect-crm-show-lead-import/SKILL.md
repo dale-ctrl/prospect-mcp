@@ -396,14 +396,14 @@ For each lead:
    accounts where the AM IS the BDE (e.g. AM=RM), assign the enquiry
    to that user directly.
 2. Call `add_contact_to_campaign` with campaignId + campaignActivityId + contactId and a `comments` tag (e.g. "<Show name> lead-load"). The tool has NO role field — a "Target" role cannot be set (Pitfall #43).
-3. Call `create_enquiry` linked to the contact, division, and campaign.
-   Assign to the BDE (not the AM).
+3. Call `create_enquiry` linked to the campaign (it cannot be linked to the contact or
+   division — see below). Assign to the BDE (not the AM).
    `create_enquiry` has no contactId / divisionId parameter (Pitfall #42): pass forename,
    surname, companyName (the CRM account name), email, jobTitle, description, source,
    campaignId, campaignActivityId and assignedTo. For a matched existing contact use the
    CRM's name and email, not the sheet's typo.
 
-**Gate 6 output**: enquiry IDs + campaign-target count. User confirms count
+**Gate 6 output**: enquiry IDs + campaign roster count (`list_campaign_contacts`). User confirms count
 matches expected lead count. Also spot-check 3 enquiries — one from each
 of ML, ML1, JL territories — to verify the assignedTo matches the
 expected BDE.
@@ -481,13 +481,13 @@ true for the current tenant, flip the mapping immediately and re-run.
 
 Programmatic audit — produce a single XLSX with one row per lead and these columns:
 
-| Lead | DivId | ContactId | EnquiryId | CampaignTarget | NoteId | TaskId | TaskDate | TaskAssignee | TaskPriority | Address OK? | Mobile OK? | **Note OK?** | All OK? |
+| Lead | DivId | ContactId | EnquiryId | OnCampaign | NoteId | TaskId | TaskDate | TaskAssignee | TaskPriority | Address OK? | Mobile OK? | **Note OK?** | All OK? |
 
 Rules for "All OK":
 - DivisionId exists, has Source = show name, has Territory FK, has customDropdown1–5 populated.
 - **Address: `addressLine1` non-empty AND postcode well-formed for the country.**
 - **Contact mobile: `MobilePhoneNumber` is non-empty if the spreadsheet had a mobile value for this lead.**
-- ContactId exists and is on the campaign as Target.
+- ContactId exists and is on the campaign activity's roster (`list_campaign_contacts`).
 - EnquiryId exists, linked to campaign, assigned to correct BDE.
 - **NoteId exists for EVERY lead — matched and new** (or note found in `search_activity_notes(contactId)` for that contact since show date). Specifically check pre-existing contacts (low ContactIds); the original May 2026 loader silently skipped them.
 - TaskId exists, taskType=SHOWLEAD, date=follow-up date (correct YEAR!), assignee=BDE.
@@ -1048,7 +1048,7 @@ Also spot-check 3 random leads via the CRM UI:
 - Account record shows Source = show name, Territory set, all sort keys (customDropdowns) populated.
 - Address is populated (line1, town, postcode all non-empty).
 - Contact mobile is populated where the spreadsheet had one.
-- Contact appears on the Campaign as Target.
+- Contact appears on the campaign activity's roster (no role — see Pitfall #43).
 - Enquiry exists, linked to the campaign, assigned to the BDE.
 - Task exists on the correct date, assigned to the BDE, with priority displayed as expected (1=Low, 2=Medium, 3=High in this CRM — see Pitfall #11).
 
@@ -1101,3 +1101,4 @@ Also spot-check 3 random leads via the CRM UI:
   - Phase 3: working dropdown values for independent prep schools recorded; create-one-then-verify.
   - Phase 5: explicit `roleCode` for heads. Phase 6: `create_enquiry` field list; campaign role removed.
   - Pitfalls #40–#47 added: Head role mapping, missing reference files, enquiry linking, no campaign role, watermark, transient 503, email handling, research sub-agents.
+- 2026-10-05 (rev 11.1): Removed leftover rev-10 wording that contradicted Pitfalls #42/#43 — Phase 6 step 3 no longer says the enquiry links to the contact/division; Gate 6, the Phase 9 audit (column renamed CampaignTarget → OnCampaign) and the Verification section check the campaign roster instead of a "Target" role.
