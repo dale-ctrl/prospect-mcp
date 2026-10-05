@@ -43,6 +43,12 @@ The user MUST supply, or Claude MUST ask for:
    contact with a blank Email / blank MobilePhoneNumber and the spreadsheet
    has a value for that field, may I patch the blank?" Defaults to NO unless
    the user opts in. See Pitfall #37.
+7. **Row filter.** Ask which rows to load. A delegate list (every attendee, most with no
+   conversation) is common: the usual rule is "only rows with a note in the Requirement
+   column". Then ask what to do with rows whose note says there is no requirement — the user
+   may want those dropped. Rows whose note says "send info" are an action and stay in.
+8. **If the campaign isn't supplied**, look for it with `search_campaigns` /
+   `search_campaign_activities` and confirm the IDs with the user rather than stopping.
 
 If anything in this list is missing, STOP and ask before reading the spreadsheet.
 
@@ -63,10 +69,21 @@ If anything in this list is missing, STOP and ask before reading the spreadsheet
 2. Compute `postcode_prefix` (first 2–4 chars before the space).
 3. Dedupe within the spreadsheet itself — flag duplicate emails, duplicate
    company+lastname pairs.
-4. Record the **session-start TaskId watermark**: call `search_tasks` with no
-   filters, top=1, ordered by latest, and save the highest TaskId returned.
-   ANY task with TaskId ≤ watermark is pre-session and MUST NOT be deleted
-   or modified during this run.
+3a. **Delegate-list sheets.** If the sheet has no postcode, address, job-title or scanner
+    column (e.g. an association's delegate list with Requirement/Action notes), say so at
+    Gate 0 and plan a read-only web research pass in Phase 2 (addresses, postcodes, phone,
+    pupil numbers, each delegate's job title, email-domain checks). Notes are then authored
+    as DL with "Scanner: not recorded" unless the user names who was on the stand.
+3b. **Row-slip check.** Hand-typed sheets drift by a row. If an email's domain or a phone's
+    dialling code doesn't fit the school on that row, check the rows above and below (IAPS
+    2026: Bolton School carried Bootham School's York phone number; Kew Green carried Kew
+    College Prep's head's email). Don't load a value that belongs to the neighbouring row —
+    flag it and record it in the activity note as "not used".
+4. Record the **TaskId watermark**. `search_tasks` cannot sort by newest (it orders by task
+   date and truncates), so the highest existing TaskId cannot be read up front. Instead the
+   watermark is **(first TaskId created this session) − 1**, recorded at Phase 8. The binding
+   rule is unchanged: only TaskIds recorded in this session's staging files may ever be
+   modified or deleted.
 
 **Gate 0 output**: `outputs/<show-slug>/00_parsed_leads.json` — count of rows,
 duplicate flags, watermark TaskId. User confirms before proceeding.
@@ -89,6 +106,15 @@ duplicate flags, watermark TaskId. User confirms before proceeding.
 > Every one of those 19 had to be merged back into the existing account
 > after the fact. Phase 1 MUST exhaust the search before any Division is
 > queued for creation.
+
+> **Already-loaded check.** Before matching, call `list_campaign_contacts` for the campaign
+> and look for very recent accounts/contacts for schools on the sheet (high DivisionIds /
+> ContactIds created since the show). A colleague may have hand-created a few leads already.
+> Reuse those records — never create a second copy — and still add the enquiry, note and task.
+>
+> **Prep / junior departments.** When the lead is a prep or junior department and CRM only
+> holds the whole school, attach the lead to the whole-school account. Create a separate
+> account only when the prep is on a separate site with its own address — and ask the user.
 
 For each lead row:
 
@@ -169,9 +195,9 @@ For every "new" Division (and optionally for matched ones with missing data):
 3. **Postcode-driven assignment — applies ONLY to NEW Divisions**:
    - Look up the postcode prefix in the `wcg_postcode_map` reference (see
      Business Rules). Outputs:
-     - Account Manager code (ML / ML1 / JM / JL)
-     - BDE code (AW / RM / CL / CL1)
-     - Office Allocated (ANDOVER for ML/JM, PLYMOUTH for ML1/JL)
+     - Account Manager code (ML / ML1 / PM / JL)
+     - BDE code for a NEW (Tier 3) account (RM for ML/PM, CL for ML1, CL1 for JL) — see "Current sales team" in Business Rules
+     - Office Allocated (ANDOVER for ML/PM, PLYMOUTH for ML1/JL)
      - Delivery Office (same as Office Allocated)
      - Territory code (full FK, see Business Rules)
      - Region label
@@ -180,8 +206,9 @@ For every "new" Division (and optionally for matched ones with missing data):
 > Phase 1, the **existing AM is retained** — do NOT overwrite based on
 > postcode. This handles the "Shooters Hill case": SE18 is a CML
 > (Miles Liesching) postcode area by the mapping, but the existing
-> Shooters Hill College account is held by John Morrish. When the JM-held
-> account is matched, JM keeps the account regardless of what the postcode
+> Shooters Hill College account is held by Phill McConnell (formerly John
+> Morrish). When the PM-held account is matched, PM keeps the account
+> regardless of what the postcode
 > rules would say. This is non-negotiable — sales attribution is a contract
 > with the team and must be preserved across imports.
 >
@@ -216,6 +243,12 @@ Process new Divisions in batches of 10. For each:
    Account Manager, Territory, Delivery Office, Office Allocated, Tier=3,
    Paper AM="N/A", Source=<show name>, Customer Type, School Status, Sector,
    Phase, Age Range, Pupil Numbers.
+   Values that worked for independent prep schools (IAPS 2026): `customerType` "PREP SCHOOL"
+   ("INFANT SCHOOL" for an infant school), `standardIndustryCode` "INDEPENDENT", `sector`
+   "EDUCATION", `customDropdown1` "N/A", `customDropdown3` "PLYMOUTH"/"ANDOVER",
+   `deliveryZoneCode` "5ceeb6" (Plymouth) or "e63c82" (Andover), `priorityId` 3,
+   `relationship` "Prospect". Use `list_dropdown_options` to confirm labels. Create ONE
+   division first, read it back with `list_divisions` + `get_division_details`, then the rest.
 2. Immediately follow with `update_division_versa_maintenance` if any Versa
    fields apply (rare for show leads — usually skip).
 3. After each batch, re-read the first division created via `list_divisions`
@@ -314,6 +347,9 @@ For each lead row:
      spreadsheet has a value — the May 2026 import missed 74 of 132 contact
      mobiles because this step was skipped.
    - **`phoneNumber`** — populated from the spreadsheet `landline` column.
+   - **`roleCode`** — pass it explicitly. The auto-resolver maps the job title "Head" to
+     "Office / Admin" (Pitfall #40). For heads, headteachers, heads of prep/junior and deputy
+     heads use `f3724d` (Head/ Principal/ SMT). Use `get_contact_roles` for other roles.
 3. NEVER create a contact when a Phase 1 match was found, even if the spelling
    differs slightly. The Neslihan case (CRM "Fulan", spreadsheet "Furlan", same
    email/phone) is the canonical example of what NOT to do.
@@ -356,12 +392,16 @@ match-vs-created tally. User confirms.
 For each lead:
 
 1. Build the DivisionId → AccountManager → BDE map from the structured
-   field. BDE lookup: ML→AW, JM→RM, ML1→CL, JL→CL1. For Rapleys-style
+   field. Assignee lookup (rev 11): EXISTING matched account → ML→AW, PM→AW, ML1→CL, JL→CL1; NEW Tier 3 account → ML→RM, PM→RM, ML1→CL, JL→CL1. Any account still showing JM is treated as PM. For Rapleys-style
    accounts where the AM IS the BDE (e.g. AM=RM), assign the enquiry
    to that user directly.
-2. Call `add_contact_to_campaign` with CampaignId + ContactId + role = "Target".
+2. Call `add_contact_to_campaign` with campaignId + campaignActivityId + contactId and a `comments` tag (e.g. "<Show name> lead-load"). The tool has NO role field — a "Target" role cannot be set (Pitfall #43).
 3. Call `create_enquiry` linked to the contact, division, and campaign.
    Assign to the BDE (not the AM).
+   `create_enquiry` has no contactId / divisionId parameter (Pitfall #42): pass forename,
+   surname, companyName (the CRM account name), email, jobTitle, description, source,
+   campaignId, campaignActivityId and assignedTo. For a matched existing contact use the
+   CRM's name and email, not the sheet's typo.
 
 **Gate 6 output**: enquiry IDs + campaign-target count. User confirms count
 matches expected lead count. Also spot-check 3 enquiries — one from each
@@ -579,7 +619,7 @@ done before declaring complete.
 19. **CML in the WCG spreadsheet means MILES, not Carmen.** This catches
     every fresh Claude session. The rep code letters in the postcode
     spreadsheet are nicknames that don't map 1:1 to CRM user codes:
-    CML→Miles (CRM:ML), JRM→John Morrish (CRM:JM), ML→Murray (CRM:ML1),
+    CML→Miles (CRM:ML), JRM→Phill McConnell (CRM:PM — replaced John Morrish, JM, who has left), ML→Murray (CRM:ML1),
     default→Jon (CRM:JL). Carmen Liesching is **CL** in CRM and is the BDE
     for Murray's territory, NOT an Account Manager in her own right for
     these imports. Read the Business Rules section before assigning any AMs.
@@ -600,7 +640,7 @@ done before declaring complete.
 21. **Retained-AM rule on matched accounts.** If a lead matches an existing
     Division in Phase 1, KEEP the existing Account Manager. Do NOT overwrite
     based on postcode. SE18 is a Miles (CML) postcode but Shooters Hill
-    College is retained by John Morrish — sales attribution travels with
+    College is retained by Phill McConnell (formerly John Morrish) — sales attribution travels with
     the account, not the postcode. The Show Lead task's `assignedTo` for
     matched leads must use the EXISTING AM's BDE, not the postcode-derived
     one.
@@ -851,8 +891,50 @@ done before declaring complete.
 
     Phase 9 audit should explicitly cross-check: for every matched
     Division, the Enquiry.AssignedTo and Task.AssignedTo should equal
-    BDE(Division.AccountManager) using the lookup ML→AW, JM→RM,
-    ML1→CL, JL→CL1, CL1→? (rare), JL1→? (rare). Flag any mismatch.
+    BDE(Division.AccountManager) using the rev 11 assignee lookup in
+    Business Rules → Current sales team (existing: ML→AW, PM→AW, ML1→CL,
+    JL→CL1; new Tier 3: ML→RM, PM→RM, ML1→CL, JL→CL1), CL1→? (rare),
+    JL1→? (rare). Flag any mismatch.
+
+40. **"Head" resolves to the wrong contact role.** `create_contact` auto-resolves the role
+    from the job title, and "Head" falls through to `271c0d` Office / Admin. Always pass
+    `roleCode: f3724d` (Head/ Principal/ SMT) for heads and deputies, and check the Role line
+    in the response for the first contact before creating the rest. If one slipped through,
+    fix it with `update_contact(roleCode=...)`.
+
+41. **Reference files are not shipped with the skill.** `wcg_postcode_map.json`,
+    `wcg_territory_fks.json` and `wcg_scanner_codes.json` are not in the plugin. Fallbacks:
+    territory FK codes from `get_territories`; the account manager for a NEW account from the
+    AMs of neighbouring accounts returned by `list_divisions(filters={postcode:<prefix>})`
+    (the Phase 1 sweep already has them). Tell the user at Gate 2 that the AM was inferred
+    this way and list the result for confirmation. Overseas schools: ask; default JL.
+
+42. **Enquiries cannot be linked to a contact or division.** `create_enquiry` stores name,
+    company and email as text plus the campaign link and assignee. Do not report enquiries as
+    "linked to the contact". The contact's link to the show is the campaign roster and the
+    activity note.
+
+43. **No campaign role.** `add_contact_to_campaign` has no role field; "Target" cannot be set.
+
+44. **Task watermark cannot be captured up front.** See Phase 0 step 4. Never call
+    `search_tasks` with a wide date range hoping to find the newest ID — it returns hundreds
+    of old tasks ordered by date and tells you nothing.
+
+45. **HTTP 503 "Database server not found" is transient.** It clears within a couple of
+    minutes. A write that returned 503 may or may not have landed: wait, then SEARCH for the
+    record (e.g. `search_tasks(contactId=...)`) before retrying, so a retry never duplicates.
+
+46. **Don't overwrite, and don't invent, emails.** When research suggests a likely address
+    (format inferred from other staff) but the school hasn't published it, leave the field
+    blank or as the sheet has it and flag it in the audit. Only apply corrections that fix an
+    obviously mistyped DOMAIN (e.g. `shebearcollege` → `shebbearcollege`). An existing CRM
+    email that looks wrong is flagged for a human, never overwritten.
+
+47. **Research belongs to read-only sub-agents; writes stay in the main session.** Two
+    parallel web-only agents (one for new schools' addresses, one for delegates' job titles
+    and email-domain checks) worked well for 68 leads. Expect to learn that some delegates are
+    deputies, that a named head has only just started, and that a prep shares its parent's
+    URN — carry those into job titles and the audit flags.
 
 ---
 
@@ -865,8 +947,8 @@ has imported show leads has gotten this wrong at least once, so triple-check.
 
 | Spreadsheet rep code | CRM AM user code | CRM AM name | CRM BDE user code | CRM BDE name | Office |
 |---|---|---|---|---|---|
-| **CML** | **ML** | **Miles Liesching** (MD) | **AW** | Al White | ANDOVER |
-| **JRM** | **JM** | **John Morrish** (Interiors Consultant) | **RM** | Rodney Morrish | ANDOVER |
+| **CML** | **ML** | **Miles Liesching** (MD) | **RM** (new Tier 3) / **AW** (existing account) | Rodney Morrish / Al White | ANDOVER |
+| **JRM** | **PM** | **Phill McConnell** (Commercial Director) — replaced John Morrish (JM, left) | **RM** (new Tier 3) / **AW** (existing account) | Rodney Morrish / Al White | ANDOVER |
 | **ML** | **ML1** | **Murray Liesching** (Interiors Consultant) | **CL** | Carmen Liesching | PLYMOUTH |
 | *(any unlisted prefix — default)* | **JL** | **Jon Liesching** (Technical Advisor) | **CL1** | Calvin Liesching | PLYMOUTH |
 
@@ -877,11 +959,33 @@ has imported show leads has gotten this wrong at least once, so triple-check.
 >   CRM code is **ML1**).
 > - When in doubt, call `get_users` and read `[Account Manager]` flags.
 
+### Current sales team (confirmed by Dale, 2026-10-05)
+
+- **John Morrish (JM) has left.** **Phill McConnell (PM)** is his replacement as rep. Any
+  account still showing AM = JM is treated as Phill's.
+- **Rodney Morrish (RM)** does BDE for Phill and Miles for **Tier 3** customers.
+- **Al White (AW)** does Client Relations for Phill and Miles for **Tier 2** clients.
+- Murray (ML1) → Carmen Liesching (CL) and Jon (JL) → Calvin Liesching (CL1) are unchanged.
+
+**Show-lead assignee (enquiry AND task) — use this table:**
+
+| Account manager | Lead matched an EXISTING account | Lead created a NEW account (Tier 3) |
+|---|---|---|
+| Phill McConnell (PM) | Al White (AW) | Rodney Morrish (RM) |
+| Miles Liesching (ML) | Al White (AW) | Rodney Morrish (RM) |
+| Murray Liesching (ML1) | Carmen Liesching (CL) | Carmen Liesching (CL) |
+| Jon Liesching (JL) | Calvin Liesching (CL1) | Calvin Liesching (CL1) |
+
+Existing Phill/Miles accounts go to Al **regardless of their tier** — the lead is on an
+existing relationship. New accounts in Jon's territory are created with Office Allocated and
+Delivery Office = PLYMOUTH. Team structure changes — at Gate 2 always show the user the
+assignee distribution and ask them to confirm it before any enquiry or task is created.
+
 ### Postcode → rep coverage (summary; full table in `wcg_postcode_map.json`)
 
 | Region group | Spreadsheet code | CRM AM | Approx postcode count |
 |---|---|---|---|
-| London / Home Counties / SE / South-East coast | JRM | John Morrish | ~308 |
+| London / Home Counties / SE / South-East coast | JRM | Phill McConnell (PM) | ~308 |
 | Brighton/Sussex/Kent/Croydon/Bromley/Dartford/London suburbs | CML | Miles Liesching | ~303 |
 | Devon/Cornwall/Dorset/Wiltshire | ML | Murray Liesching | ~187 |
 | Everything else (Midlands, North, Wales, Scotland, NI) | *(default)* | Jon Liesching | (residual) |
@@ -923,8 +1027,7 @@ per session — the FK string is stable but worth a sanity check.
 
 ### Campaign roles
 
-Show attendees go on the campaign as **Target** role. Use
-`add_contact_to_campaign` with role=`Target`.
+The `add_contact_to_campaign` tool has no role parameter. Add each contact to the campaign activity's roster with a `comments` tag; do not promise a "Target" role. Verify with `list_campaign_contacts` that the roster count equals the lead count.
 
 ---
 
@@ -990,3 +1093,11 @@ Also spot-check 3 random leads via the CRM UI:
   - Phase 8 priority numbers corrected. Phase 8 first-task UI spot-check added.
   - Phase 9 audit gains TaskPriority column with explicit CRM-UI spot-check requirement.
   - Prereq list expanded: added explicit Phase-0 question about blank-field-patches on matched contacts.
+- 2026-10-05 (rev 11): IAPS Annual Conference 2026 import retrospective (68 leads from a 295-row delegate list; 14 new Divisions, 61 new contacts, 68 enquiries, 68 notes, 68 tasks).
+  - Team structure updated: John Morrish (JM) has left, Phill McConnell (PM) replaces him. New "Current sales team" section with the show-lead assignee table (existing Phill/Miles accounts → Al White; new Tier 3 Phill/Miles accounts → Rodney Morrish; ML1 → CL; JL → CL1). Phase 2, Phase 6, Pitfalls 19/21/39 and the rep-code and postcode tables updated to match.
+  - Prerequisites 7–8 added: row filter ("only rows with a requirement note") and campaign lookup.
+  - Phase 0: TaskId watermark redefined (search_tasks cannot sort by newest); delegate-list and row-slip steps added.
+  - Phase 1: already-loaded check and prep/junior-department rule added.
+  - Phase 3: working dropdown values for independent prep schools recorded; create-one-then-verify.
+  - Phase 5: explicit `roleCode` for heads. Phase 6: `create_enquiry` field list; campaign role removed.
+  - Pitfalls #40–#47 added: Head role mapping, missing reference files, enquiry linking, no campaign role, watermark, transient 503, email handling, research sub-agents.
